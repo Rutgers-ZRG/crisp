@@ -1,12 +1,35 @@
 # CRISP
 
-CRISP is an experimental crystal structure prediction toolkit built around
-fingerprint-space surrogate models. It combines random crystal generation,
-fingerprint-based deduplication, Gaussian-process screening, optional biased
-refinement stages, and local or Slurm-backed structure relaxation.
+CRISP is an experimental toolkit for differentiable global optimization in
+crystal structure prediction. It searches crystal-structure space by combining
+random structure generation, fingerprint-space surrogate modeling,
+gradient-based fingerprint projections, targeted refinement, and local or
+Slurm-backed structure relaxation.
+
+The central idea is to make global crystal structure prediction more
+sample-efficient than pure random search plus local relaxation. CRISP represents
+structures through differentiable fingerprints, trains Gaussian-process
+surrogates on relaxed candidates, and uses those models to steer new structures
+toward promising low-enthalpy regions while preserving compatibility with
+standard ASE calculators.
 
 The code is research software. Expect to adapt calculators, model paths, and
 cluster settings for your environment before running production searches.
+
+## Core Ideas
+
+- Differentiable fingerprint-space optimization: map atomic and cell degrees of
+  freedom into structure fingerprints, then use fingerprint gradients to guide
+  candidate refinement.
+- Global structure prediction loop: generate diverse candidates, relax them,
+  deduplicate by fingerprint distance, update an archive, and propose the next
+  generation from surrogate-guided search.
+- Surrogate-assisted screening: use Gaussian-process models and acquisition
+  scores to prioritize expensive relaxations.
+- Targeted finishers and bias terms: refine promising structures with
+  fingerprint-targeted optimization and optional cluster-aware reform steps.
+- Calculator-agnostic relaxation: connect to ASE-compatible MLIPs or DFT
+  backends locally, or dispatch relaxations through Slurm.
 
 ## What Is Included
 
