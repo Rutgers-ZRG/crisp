@@ -38,6 +38,7 @@ cluster settings for your environment before running production searches.
 - `examples/`: templates for configuring local/HPC runs without hardcoded
   private paths.
 - `docs/`: release notes and dependency/setup guidance.
+- `CHANGELOG.md`: public commit log and summarized development milestones.
 
 Generated benchmark outputs, model weights, VASP/POSCAR files, scheduler logs,
 and private scratch scripts are intentionally excluded from the public branch.
