@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent and private workspace state
+.[c]laude/
+
+# Generated logs, scheduler output, and run artifacts
+*.log
+*.out
+*.png
+slurm-*.out
+dedup_cal_*.out
+calibration_results.json
+results_*/
+benchmark_results*/
+output/
+checkpoints/
+archive/
+crisp_ksi_pnma/
+CRISPSpecification.md
+
+# Structure-search generated files
+POSCAR*
+CONTCAR
+OUTCAR
+INCAR
+KPOINTS
+POTCAR
+*.vasp
+*.extxyz
+*.xyz
+*.traj
+
+# Local model/potential files; document how to obtain these instead.
+models/
+potentials/
+*.pth
+*.pt
+*.ckpt
+*.model
+*.onnx
+*.npz
+
+# Private benchmark and scratch scripts kept outside the public branch.
+/benchmark_*.py
+/submit_*.sh
+/quick_calibrate.py
+/calibrate_dedup.py
+/fp_barrier_test.py
+/fp_pso*.py
+/dump_*.py
+/diagnose_generation.py
+/reeval_b28.py
+/test_*.py
+
+# Public docs allowlist. Keep private reports/build products local unless
+# explicitly force-added for release.
+docs/*
+!docs/
+!docs/dependencies.md
+!docs/public-release.md
+
+# LaTeX / document build outputs
+docs/*.aux
+docs/*.bbl
+docs/*.blg
+docs/*.log
+docs/*.out
+docs/*.pdf
+docs/*.png
