@@ -218,6 +218,8 @@ class CRISPSearch:
         budget_relax: Optional[int] = None,
         sanity_H_floor: Optional[float] = None,
         sanity_min_dist: float = 0.6,
+        cawr_pretreat_mode: str = "refine",
+        gp_auto_tune: bool = False,
     ):
         if mlip_calc_factory is None and hpc_relaxer is None:
             raise ValueError(
@@ -311,10 +313,17 @@ class CRISPSearch:
 
         # CAWR pretreatment setup
         self._cawr_config = None
+        if cawr_pretreat_mode not in ("refine", "snap"):
+            raise ValueError(
+                f"Unknown cawr_pretreat_mode: {cawr_pretreat_mode!r}")
+        self.cawr_pretreat_mode = cawr_pretreat_mode
         if enable_cawr_pretreat:
             ccfg = cawr_config or CAWRConfig()
             ccfg.pressure_GPa = pressure_GPa
             self._cawr_config = ccfg
+
+        # GP hyperparameter auto-tuning (marginal likelihood)
+        self.gp_auto_tune = gp_auto_tune
 
         # GP-guided refinement setup
         self.enable_gp_guided = enable_gp_guided
@@ -341,7 +350,8 @@ class CRISPSearch:
             loads the latest generation checkpoint and continues.
         """
         archive = StructureArchive(self.fp_calc, self.dup_threshold)
-        gp = ExactGP(kernel=self.gp_kernel, length_scale=self.gp_length_scale)
+        gp = ExactGP(kernel=self.gp_kernel, length_scale=self.gp_length_scale,
+                     auto_tune=self.gp_auto_tune)
         bias = BiasPotential(gp, kappa=self.kappa, beta=self.beta,
                              gamma=self.gamma)
         projector = ForceProjector(self.fp_calc)
@@ -1090,6 +1100,26 @@ class CRISPSearch:
         import gc
         if self._cawr_config is None or self.treatment_calc_factory is None:
             return candidates
+
+        if self.cawr_pretreat_mode == "snap":
+            # J+ FP-space Newton snap — pure geometry, no MLIP calls
+            from .cawr import cawr_snap
+            n_refined = 0
+            for i, atoms in enumerate(candidates):
+                try:
+                    candidates[i] = cawr_snap(
+                        atoms, self.fp_calc,
+                        min_dist_ang=self._cawr_config.min_dist_ang)
+                    candidates[i].info['cawr_applied'] = 'snap'
+                    n_refined += 1
+                except Exception as exc:
+                    logger.warning("CAWR snap failed for candidate %d: %s",
+                                   i, exc)
+            if n_refined > 0:
+                print(f"  CAWR snap: {n_refined}/{len(candidates)}"
+                      " candidates")
+            return candidates
+
         n_refined = 0
         for i, atoms in enumerate(candidates):
             calc = self.treatment_calc_factory()

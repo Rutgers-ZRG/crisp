@@ -93,10 +93,23 @@ def make_calc_factory(potential: str, device: Optional[str] = None,
     return factory
 
 
+VARIANTS = ('', 'nocawr', 'nofinisher', 'jsnap', 'gpguided', 'gptune',
+            'strongfin')
+
+
 def build_search(spec: SystemSpec, mode: str, calc_factory,
                  budget_relax: int, max_generations: int,
-                 checkpoint_dir: str):
-    """Construct CRISPSearch for the given mode (documented configs)."""
+                 checkpoint_dir: str, variant: str = ''):
+    """Construct CRISPSearch for the given mode (documented configs).
+
+    `variant` applies a single Phase-4 A/B modification to crisp mode:
+      nocawr     : CAWR pretreat off
+      nofinisher : FP-target finisher off
+      jsnap      : CAWR pretreat replaced by the J+ FP-space snap
+      gpguided   : GP-guided refinement on (fixed lambda=3)
+      gptune     : GP hyperparameter auto-tune on
+      strongfin  : finisher bias 120 steps, lambda_max 40
+    """
     from crisp import CRISPSearch, FingerprintCalculator, CAWRConfig
     from crisp.finishers.fp_target import FinisherConfig
 
@@ -159,10 +172,16 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             **common)
 
     if mode == 'crisp':
+        if variant not in VARIANTS:
+            raise ValueError(f"Unknown variant: {variant!r}")
+        bias_steps = 120 if variant == 'strongfin' else 60
+        lambda_max = 40.0 if variant == 'strongfin' else 20.0
         finisher_cfg = FinisherConfig(
-            matching_backend="hungarian", pre_steps=30, bias_steps=60,
+            matching_backend="hungarian", pre_steps=30,
+            bias_steps=bias_steps,
             cleanup_fmax=0.02, cleanup_max_steps=60,
-            eta=0.3, lambda_min=0.0, lambda_max=20.0, anneal_to_zero=True,
+            eta=0.3, lambda_min=0.0, lambda_max=lambda_max,
+            anneal_to_zero=True,
             optimizer="FIRE", gate_enabled=True, run_on_mutants=True,
             d_gate_init=0.50, d_gate_final=0.20, anneal_gens=10,
             matching_interval=5, relax_cell=True, min_dist_ang=1.0,
@@ -179,11 +198,14 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             n_mutants=spec.n_mutants,
             enable_fpj_mutations=True,
             n_fpj_mutants=spec.n_mutants,
-            enable_fp_finisher=True,
+            enable_fp_finisher=(variant != 'nofinisher'),
             finisher_config=finisher_cfg,
             n_finisher_targets=8,
-            enable_cawr_pretreat=True,
+            enable_cawr_pretreat=(variant != 'nocawr'),
             cawr_config=cawr_cfg,
+            cawr_pretreat_mode='snap' if variant == 'jsnap' else 'refine',
+            enable_gp_guided=(variant == 'gpguided'),
+            gp_auto_tune=(variant == 'gptune'),
             gp_energy_margin=0.2, gp_confidence_frac=0.15,
             **common)
 
@@ -229,12 +251,14 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
                   max_generations: Optional[int] = None,
                   device: Optional[str] = None, model_path: str = "",
                   calibration: Optional[str] = None,
-                  spec_override: Optional[SystemSpec] = None) -> dict:
+                  spec_override: Optional[SystemSpec] = None,
+                  variant: str = '') -> dict:
     """Run one benchmark; write and return the result record."""
     spec = spec_override or SYSTEMS[system]
     max_gens = max_generations or spec.max_generations
     os.makedirs(out_dir, exist_ok=True)
-    tag = f"{spec.name}_{potential}_{mode}_s{seed}"
+    mode_label = f"{mode}-{variant}" if variant else mode
+    tag = f"{spec.name}_{potential}_{mode_label}_s{seed}"
     ckpt_dir = os.path.join(out_dir, f"{tag}_ckpt")
 
     # Seed everything (numpy drives pyXtal + CRISP internals)
@@ -249,7 +273,7 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
     calc_factory = make_calc_factory(potential, device=device,
                                      model_path=model_path)
     search = build_search(spec, mode, calc_factory, budget_relax,
-                          max_gens, ckpt_dir)
+                          max_gens, ckpt_dir, variant=variant)
 
     # PES-poisoning floor from calibration (H_ref - 0.5 eV/at)
     cal_file_early = calibration or os.path.join(
@@ -269,7 +293,8 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
     wall_s = time.time() - t0
 
     result = {
-        'system': spec.name, 'potential': potential, 'mode': mode,
+        'system': spec.name, 'potential': potential, 'mode': mode_label,
+        'variant': variant,
         'seed': seed, 'budget_relax': budget_relax,
         'n_relaxed_total': search.n_relaxed,
         'n_unique': len(archive.entries),
@@ -330,6 +355,8 @@ def main():
     p.add_argument('--device', default=None)
     p.add_argument('--model-path', default="")
     p.add_argument('--calibration', default=None)
+    p.add_argument('--variant', default='',
+                   choices=list(VARIANTS))
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
@@ -337,7 +364,8 @@ def main():
         system=args.system, potential=args.potential, mode=args.mode,
         seed=args.seed, budget_relax=args.budget_relax, out_dir=args.out,
         max_generations=args.max_gens, device=args.device,
-        model_path=args.model_path, calibration=args.calibration)
+        model_path=args.model_path, calibration=args.calibration,
+        variant=args.variant)
     print(json.dumps({k: v for k, v in result.items()
                       if k != 'config_echo'}, indent=2))
 

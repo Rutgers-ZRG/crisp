@@ -36,7 +36,7 @@ cd {workdir}
 {python} -u -m benchmarks.runner \\
     --system {system} --potential {potential} --mode {mode} \\
     --seed {seed} --budget-relax {budget} --max-gens {max_gens} \\
-    --out {out_dir} {extra}
+    --out {out_dir} {variant_arg}{extra}
 """
 
 ENV_PYTHON = {
@@ -65,6 +65,8 @@ def main():
     p.add_argument('--mem', default='24G')
     p.add_argument('--time', default='12:00:00')
     p.add_argument('--model-path', default='')
+    p.add_argument('--variant', default='',
+                   help='crisp-mode variant (nocawr/jsnap/...)')
     args = p.parse_args()
 
     os.makedirs(args.script_dir, exist_ok=True)
@@ -80,8 +82,12 @@ def main():
             for mode in args.modes:
                 max_gens = max(spec.max_generations,
                                -(-args.budget // per_gen[mode]) + 2)
+                mode_label = (f"{mode}-{args.variant}"
+                              if args.variant and mode == 'crisp' else mode)
+                variant_arg = (f"--variant {args.variant} "
+                               if args.variant and mode == 'crisp' else '')
                 for seed in args.seeds:
-                    tag = f"{system}_{potential}_{mode}_s{seed}"
+                    tag = f"{system}_{potential}_{mode_label}_s{seed}"
                     extra = ''
                     if args.model_path and potential == 'matpes':
                         extra = f"--model-path {args.model_path}"
@@ -94,7 +100,8 @@ def main():
                         python=ENV_PYTHON[potential], system=system,
                         potential=potential, mode=mode, seed=seed,
                         budget=args.budget, max_gens=max_gens,
-                        out_dir=args.out, extra=extra)
+                        out_dir=args.out, variant_arg=variant_arg,
+                        extra=extra)
                     path = os.path.join(args.script_dir, f"{tag}.sbatch")
                     with open(path, 'w') as f:
                         f.write(script)
