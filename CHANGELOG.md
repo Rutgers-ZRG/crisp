@@ -7,6 +7,37 @@ replayed as synthetic commits.
 
 ## Public Git History
 
+### 2026-06-09/10 - Correctness audit + benchmark harness (sota-dev)
+
+- **Fixed: projected bias stress convention.** `project_forces_and_stress`
+  (and the dfpe strain Jacobian / per-atom projector) applied strain to the
+  wrong side for row-vector lattices, left off-diagonal derivatives
+  unsymmetrized, and returned the opposite sign from ASE's
+  `sigma = +(1/V) dE/d_eps`. Every `relax_cell=True` bias consumer
+  (FP-target finisher, CAWR, GP-guided relaxation) had the cell degrees of
+  freedom steered against the fingerprint bias. Now finite-difference-exact
+  for all six Voigt components (`tests/test_gradients.py`).
+- **Fixed: searches were unseedable.** pyXtal generation never received a
+  `random_state`; runs could not be reproduced by seeding. Generation is now
+  tied to the global numpy RNG stream.
+- **Fixed: CAWR cluster-loss gradient** was `4*n_c*(fp - mu)` instead of the
+  exact `2*(fp - mu)` — a cluster-size-dependent distortion of the bias
+  direction (finite-difference verified).
+- **Performance: random generation** now passes a `Tol_matrix` and a
+  non-compressed volume factor to pyXtal — ~10x throughput at N=64 with
+  100% yield (the "64-atom bottleneck" was the post-hoc rejection loop).
+- **Performance: full FP Jacobians use forward-mode autograd** — 14x less
+  memory (17 GB -> 1.2 GB peak at 28 atoms), numerically identical.
+- **New: archive sanity guard** against PES poisoning (calibrated enthalpy
+  floor + minimum-distance check) and **opt-in GP hyperparameter
+  auto-tuning** by log marginal likelihood.
+- **New: `benchmarks/` harness** — reproducible multi-system CSP benchmarks
+  (spglib-verified references, per-potential ground-truth calibration,
+  random/fponly/crisp modes + A/B variants, seeded/resumable runners,
+  Slurm matrix generation, success metrics and aggregation).
+- Instrumentation: finisher/CAWR record bias-phase steps and structured
+  stop reasons (silent failures are now measurable).
+
 ### 2026-05-28 - Emphasize differentiable global optimization
 
 - Revised the README to present CRISP as a differentiable global optimization
