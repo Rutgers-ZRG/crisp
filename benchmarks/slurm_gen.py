@@ -35,7 +35,8 @@ export OMP_NUM_THREADS={cpus}
 cd {workdir}
 {python} -u -m benchmarks.runner \\
     --system {system} --potential {potential} --mode {mode} \\
-    --seed {seed} --budget-relax {budget} --out {out_dir} {extra}
+    --seed {seed} --budget-relax {budget} --max-gens {max_gens} \\
+    --out {out_dir} {extra}
 """
 
 ENV_PYTHON = {
@@ -69,8 +70,16 @@ def main():
     os.makedirs(args.script_dir, exist_ok=True)
     n = 0
     for system in args.systems:
+        spec = SYSTEMS[system]
+        # Ensure the generation cap cannot end the run before the
+        # relaxation budget (random mode only relaxes n_random/gen).
+        per_gen = {'random': spec.n_random,
+                   'fponly': spec.n_random + spec.n_mutants + 5,
+                   'crisp': spec.n_random + 2 * spec.n_mutants}
         for potential in args.potentials:
             for mode in args.modes:
+                max_gens = max(spec.max_generations,
+                               -(-args.budget // per_gen[mode]) + 2)
                 for seed in args.seeds:
                     tag = f"{system}_{potential}_{mode}_s{seed}"
                     extra = ''
@@ -84,7 +93,8 @@ def main():
                         time=args.time, workdir=args.workdir,
                         python=ENV_PYTHON[potential], system=system,
                         potential=potential, mode=mode, seed=seed,
-                        budget=args.budget, out_dir=args.out, extra=extra)
+                        budget=args.budget, max_gens=max_gens,
+                        out_dir=args.out, extra=extra)
                     path = os.path.join(args.script_dir, f"{tag}.sbatch")
                     with open(path, 'w') as f:
                         f.write(script)
