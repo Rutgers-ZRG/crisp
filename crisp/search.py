@@ -381,6 +381,7 @@ class CRISPSearch:
         # FP-targeted finisher setup
         self._finisher = None
         self._kick_finisher = None
+        self.finisher_stagnation_kick = finisher_stagnation_kick
         if enable_fp_finisher:
             fcfg = finisher_config or FinisherConfig()
             fcfg.pressure_GPa = pressure_GPa
@@ -391,11 +392,8 @@ class CRISPSearch:
             self._finisher = FPTargetFinisher(fp_calc, target_lib, fcfg)
             self._target_lib = target_lib
 
-            # Adaptive stagnation kick: while progress is being made the
-            # finisher refines (annealed MLIP-mixed bias); under
-            # stagnation it switches to a fixed-lambda FP-only kick —
-            # the exploration mechanism that cracked the hard systems
-            # (b28/mgsio3_40) without paying its cost on easy ones.
+            # Kick finisher (fixed-lambda FP-only) used by the
+            # 'stagnation' and 'mixed' policies — see _apply_finisher.
             self.finisher_stagnation_kick = finisher_stagnation_kick
             if finisher_stagnation_kick:
                 import copy
@@ -1196,14 +1194,25 @@ class CRISPSearch:
                            "none provided (HPC-only mode). Skipping finisher.")
             return candidates, is_mutant
 
-        # Adaptive kick: under stagnation, switch to the fixed-lambda
-        # FP-only kick finisher (no MLIP during the bias phase)
+        # Kick policy:
+        #   'stagnation' (True): switch ALL candidates to the
+        #     fixed-lambda FP-only kick once stagnant — recovers exploit
+        #     speed on easy systems but forfeits cheap early kick wins.
+        #   'mixed': hedge EVERY generation — kick half the eligible
+        #     candidates, exploit the other half (kick-first wins on
+        #     mgsio3_40 came from gen-1 candidates).
         stagnating = stagnation_count >= self._finisher.config.stagnation_gens
-        use_kick = self._kick_finisher is not None and stagnating
-        finisher = self._kick_finisher if use_kick else self._finisher
+        mode = self.finisher_stagnation_kick
+        kick_all = (self._kick_finisher is not None and stagnating
+                    and mode is not False)
 
         n_finished = 0
+        n_kicked = 0
         for i, atoms in enumerate(candidates):
+            use_kick = (self._kick_finisher is not None
+                        and (kick_all
+                             or (mode == 'mixed' and i % 2 == 1)))
+            finisher = self._kick_finisher if use_kick else self._finisher
             mutant_flag = is_mutant[i] if i < len(is_mutant) else False
             if not finisher.should_run(atoms, gen, is_mutant=mutant_flag):
                 atoms.info['finisher_applied'] = False
@@ -1216,6 +1225,7 @@ class CRISPSearch:
                     stagnation_count=stagnation_count)
                 candidates[i].info['finisher_kick'] = use_kick
                 n_finished += 1
+                n_kicked += int(use_kick)
             except Exception as exc:
                 logger.warning("Finisher failed for candidate %d: %s", i, exc)
             finally:
@@ -1229,9 +1239,12 @@ class CRISPSearch:
                     pass
 
         if n_finished > 0:
-            mode = ("FP-kick" if use_kick
-                    else ("PSO-explore" if stagnating else "exploit"))
-            print(f"  FP finisher [{mode}]: applied to "
+            label = ("FP-kick" if kick_all
+                     else (f"mixed {n_kicked}k/{n_finished - n_kicked}e"
+                           if mode == 'mixed'
+                           else ("PSO-explore" if stagnating
+                                 else "exploit")))
+            print(f"  FP finisher [{label}]: applied to "
                   f"{n_finished}/{len(candidates)} candidates")
 
         return candidates, is_mutant
