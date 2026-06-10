@@ -63,7 +63,9 @@ class PublicCoreTests(unittest.TestCase):
         for voigt_idx in range(6):
             delta_fp = dfpe[:, voigt_idx, :] * eps
             delta_loss = np.sum(dL_dfp * delta_fp)
-            expected_delta_loss = -volume * stress[voigt_idx] * eps
+            # ASE convention: delta_E = +V * sigma * eps (the historical
+            # -V form encoded the pre-2026-06 sign bug)
+            expected_delta_loss = volume * stress[voigt_idx] * eps
             self.assertAlmostEqual(delta_loss, expected_delta_loss, places=12)
 
     def test_autograd_stress_projection_uses_ase_sign_convention(self):
@@ -95,7 +97,11 @@ class PublicCoreTests(unittest.TestCase):
             forces, stress = fp_calc.project_forces_and_stress(atoms, np.ones((2, 1)))
 
             self.assertTrue(np.allclose(forces, 0.0))
-            self.assertAlmostEqual(stress[0], -2.0)
+            # ASE convention sigma = +(1/V) dE/d_eps: S = 2*lat[0,0],
+            # V = 1 -> sigma_xx = +2. (The historical assertion of -2.0
+            # encoded the old sign/parametrization bug, fixed 2026-06;
+            # see tests/test_gradients.py for the full FD audit.)
+            self.assertAlmostEqual(stress[0], 2.0)
             self.assertTrue(np.allclose(stress[1:], 0.0))
         finally:
             fp_module._HAS_TORCH_FPLIB = old_has

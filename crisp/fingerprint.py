@@ -232,9 +232,14 @@ class FingerprintCalculator:
         lat_t = torch.tensor(lat_np, dtype=torch.float64)
         spos = torch.tensor(atoms.get_scaled_positions(), dtype=torch.float64)
 
-        # Strain variable for stress (evaluated at strain=0)
+        # Symmetric strain variable, applied on the ASE side: with
+        # row-vector lattices the deformation x' = (I+eps) x reads
+        # lat' = lat @ (I+eps). (The historical (I+strain) @ lat strained
+        # the wrong side and carried a sign flip — bias stress was not in
+        # the ASE convention, so cell relaxation under bias steered wrong.)
         strain = torch.zeros(3, 3, dtype=torch.float64, requires_grad=True)
-        lat_s = (torch.eye(3, dtype=torch.float64) + strain) @ lat_t
+        eps_sym = 0.5 * (strain + strain.T)
+        lat_s = lat_t @ (torch.eye(3, dtype=torch.float64) + eps_sym)
 
         # Fractional-coordinate variable for atomic forces
         spos_var = spos.clone().detach().requires_grad_(True)
@@ -254,9 +259,10 @@ class FingerprintCalculator:
         lat_inv_T = torch.linalg.inv(lat_t.T)
         forces = -(grad_spos @ lat_inv_T).detach().numpy()
 
-        # ASE stress follows σ_v = -(1/V) · ∂E/∂ε[a,b].
+        # ASE convention: σ_v = +(1/V) · ∂E/∂ε (tensile positive).
+        # eps_sym already symmetrizes the off-diagonal derivative.
         gs = grad_strain.detach().numpy()
-        stress_voigt = -np.array([gs[a, b] for a, b in _VOIGT_IDX]) / vol
+        stress_voigt = np.array([gs[a, b] for a, b in _VOIGT_IDX]) / vol
 
         return forces, stress_voigt
 
@@ -343,11 +349,18 @@ class FingerprintCalculator:
         dfp = jac_pos.detach().numpy().reshape(nat, fp_dim, nat, 3).transpose(0, 2, 3, 1)
 
         # Strain Jacobian: dfpe[i, v, m] = d fp[i,m] / d strain_voigt[v]
+        # Symmetric strain on the ASE side (lat' = lat @ (I+eps)); Voigt
+        # shears split across the two off-diagonal elements, matching the
+        # corrected project_forces_and_stress convention.
         def fp_func_strain(strain_voigt):
             eps = torch.zeros(3, 3, dtype=torch.float64)
             for iv, (a, b) in enumerate(_VOIGT_IDX):
-                eps[a, b] = strain_voigt[iv]
-            lat_s = (torch.eye(3, dtype=torch.float64) + eps) @ lat_t
+                if a == b:
+                    eps[a, a] = strain_voigt[iv]
+                else:
+                    eps[a, b] = 0.5 * strain_voigt[iv]
+                    eps[b, a] = eps[b, a] + 0.5 * strain_voigt[iv]
+            lat_s = lat_t @ (torch.eye(3, dtype=torch.float64) + eps)
             rxyz_s = spos @ lat_s
             return torch_fplib.get_lfp(
                 (lat_s, rxyz_s, types, znucl),

@@ -8,8 +8,8 @@ Sinkhorn OT matching).
 Chain rule:
     F_{j,k} = -Σ_{i,m} dL/dfp_{i,m} · dfp[i,j,k,m]
 
-Stress (Voigt):
-    σ_v = -(1/V) Σ_{i,m} dL/dfp_{i,m} · dfpe[i,v,m]
+Stress (Voigt, ASE convention σ = +(1/V) ∂E/∂ε):
+    σ_v = +(1/V) Σ_{i,m} dL/dfp_{i,m} · dfpe[i,v,m]
 
 where dfp[i,j,k,m] = ∂fp_{i,m}/∂r_{j,k} and dfpe[i,v,m] = ∂fp_{i,m}/∂ε_v.
 """
@@ -51,9 +51,11 @@ def project_peratom_stress(dfpe: np.ndarray, dL_dfp: np.ndarray,
     Returns
     -------
     stress : np.ndarray, shape (6,)
-        Voigt-order stress [xx, yy, zz, yz, xz, xy].
+        Voigt-order stress [xx, yy, zz, yz, xz, xy] (ASE convention,
+        σ = +(1/V) ∂E/∂ε — the historical minus sign was the old
+        non-ASE convention, fixed together with the dfpe strain side).
     """
-    return -(1.0 / volume) * np.einsum("im,ivm->v", dL_dfp, dfpe, optimize=True)
+    return (1.0 / volume) * np.einsum("im,ivm->v", dL_dfp, dfpe, optimize=True)
 
 
 def project_peratom_forces_and_stress(
