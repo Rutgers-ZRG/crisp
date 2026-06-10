@@ -94,7 +94,7 @@ def make_calc_factory(potential: str, device: Optional[str] = None,
 
 
 VARIANTS = ('', 'nocawr', 'nofinisher', 'jsnap', 'gpguided', 'gptune',
-            'strongfin', 'fpjheavy', 'zerotreat', 'swap')
+            'strongfin', 'fpjheavy', 'zerotreat', 'swap', 'lean', 'leanzero')
 
 
 def build_search(spec: SystemSpec, mode: str, calc_factory,
@@ -114,6 +114,9 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
       zerotreat  : finisher/CAWR on ZeroCalculator with fixed lambda=1
                    (the fponly treatment with the crisp mutation mix)
       swap       : FP-guided species-swap mutants on (cation ordering)
+      lean       : no CAWR + 2x FP-J mutants, no softmutants (combines
+                   the two winning A/B ingredients, MLIP finisher kept)
+      leanzero   : lean with the FP-only fixed-lambda finisher
     """
     from crisp import CRISPSearch, FingerprintCalculator, CAWRConfig
     from crisp.finishers.fp_target import FinisherConfig
@@ -198,7 +201,7 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             pressure_GPa=spec.pressure_GPa, relax_cell=True,
             anneal_to_zero=True, optimizer="FIRE", min_dist_ang=1.2,
             max_f_bias_rms=50.0)
-        if variant == 'zerotreat':
+        if variant in ('zerotreat', 'leanzero'):
             finisher_cfg.pre_steps = 0
             finisher_cfg.bias_steps = 30
             finisher_cfg.cleanup_max_steps = 0
@@ -208,19 +211,21 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             cawr_cfg.lambda_min = 1.0
             cawr_cfg.anneal_to_zero = False
             cawr_cfg.cleanup_steps = 0
+        heavy_fpj = variant in ('fpjheavy', 'lean', 'leanzero')
         return CRISPSearch(
             treatment_calc_factory=(
-                (lambda: ZeroCalculator()) if variant == 'zerotreat'
-                else None),
-            use_mutations=(variant != 'fpjheavy'),
+                (lambda: ZeroCalculator())
+                if variant in ('zerotreat', 'leanzero') else None),
+            use_mutations=not heavy_fpj,
             n_mutants=spec.n_mutants,
             enable_fpj_mutations=True,
-            n_fpj_mutants=(2 * spec.n_mutants if variant == 'fpjheavy'
+            n_fpj_mutants=(2 * spec.n_mutants if heavy_fpj
                            else spec.n_mutants),
             enable_fp_finisher=(variant != 'nofinisher'),
             finisher_config=finisher_cfg,
             n_finisher_targets=8,
-            enable_cawr_pretreat=(variant != 'nocawr'),
+            enable_cawr_pretreat=(
+                variant not in ('nocawr', 'lean', 'leanzero')),
             cawr_config=cawr_cfg,
             cawr_pretreat_mode='snap' if variant == 'jsnap' else 'refine',
             enable_gp_guided=(variant == 'gpguided'),
