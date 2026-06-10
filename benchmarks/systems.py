@@ -30,8 +30,14 @@ class SystemSpec:
     vol_per_atom_range: tuple
     min_dist_ang: float = 1.5
     dup_threshold: float = 0.03
-    success_dfp: float = 0.05
-    success_dH_meV: float = 5.0
+    # Identity thresholds, calibrated against measured impostor
+    # floors (2026-06): different polymorphs can sit at d_fp ~ 0.005-0.01
+    # (elemental) or ~0.02 (multi-species, leg disabled there); relaxed
+    # same-structure hits sit at ~1e-4-1e-3. The dH gate matches the
+    # fmax=0.05 relaxation precision (~10 meV residual); the identity
+    # leg (spacegroup or tight d_fp) is always required.
+    success_dfp: float = 0.005
+    success_dH_meV: float = 15.0
     max_generations: int = 25
     n_random: int = 15
     n_mutants: int = 5
@@ -225,7 +231,8 @@ SYSTEMS: Dict[str, SystemSpec] = {
         difficulty='easy',
         refs={'diamond': si_diamond, 'beta_tin': si_beta_tin},
         expected_gs='diamond',
-        vol_per_atom_range=(14.0, 26.0), min_dist_ang=1.8),
+        vol_per_atom_range=(14.0, 26.0), min_dist_ang=1.8,
+        success_dfp=0.002),
     'b28': SystemSpec(
         name='b28', composition={'B': 28}, pressure_GPa=50.0,
         difficulty='easy',
