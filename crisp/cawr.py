@@ -112,6 +112,34 @@ def discover_clusters(fp, min_k=2, max_k=8):
     return best_labels, best_k
 
 
+def cawr_loss_grad(fp, labels):
+    """CAWR cluster-compactness loss and its gradient.
+
+    L = sum_c sum_{i in c} ||fp_i - mu_c||^2
+
+    Returns (loss, dL_dfp) with dL_dfp of shape fp.shape. Singleton
+    clusters contribute nothing.
+    """
+    nat, fp_dim = fp.shape
+    loss = 0.0
+    dL_dfp = np.zeros((nat, fp_dim))
+    for c in np.unique(labels):
+        idx = np.where(labels == c)[0]
+        n_c = len(idx)
+        if n_c < 2:
+            continue
+        mu_c = fp[idx].mean(axis=0)
+        diff = fp[idx] - mu_c
+        loss += float((diff ** 2).sum())
+        # Exact gradient: the mu_c dependence cancels because
+        # sum_{j in c}(fp_j - mu_c) = 0, leaving 2(fp_i - mu_c).
+        # (A historical 4*n_c prefactor distorted the bias direction
+        # whenever cluster sizes differed.)
+        for j, i in enumerate(idx):
+            dL_dfp[i] = 2.0 * diff[j]
+    return loss, dL_dfp
+
+
 class CAWRBiasCalculator(Calculator):
     """ASE Calculator that mixes physical forces with CAWR symmetry bias.
 
@@ -159,16 +187,7 @@ class CAWRBiasCalculator(Calculator):
                 self._labels, self._last_k = discover_clusters(
                     fp, cfg.min_k, cfg.max_k)
 
-                nat, fp_dim = fp.shape
-                dL_dfp = np.zeros((nat, fp_dim))
-                for c in np.unique(self._labels):
-                    idx = np.where(self._labels == c)[0]
-                    n_c = len(idx)
-                    if n_c < 2:
-                        continue
-                    mu_c = fp[idx].mean(axis=0)
-                    for i in idx:
-                        dL_dfp[i] = 4.0 * n_c * (fp[i] - mu_c)
+                loss, dL_dfp = cawr_loss_grad(fp, self._labels)
 
                 if cfg.relax_cell:
                     self._f_bias, self._s_bias = \
@@ -178,7 +197,7 @@ class CAWRBiasCalculator(Calculator):
                     self._f_bias = self.fp_calc.project_forces(
                         self.atoms, dL_dfp)
                     self._s_bias = np.zeros(6)
-                self._e_bias = float(np.sum(dL_dfp ** 2))
+                self._e_bias = float(loss)
 
             f_bias = self._f_bias
             s_bias = self._s_bias

@@ -420,6 +420,15 @@ class FPTargetFinisher:
         atoms.info['finisher_bias_steps'] = int(getattr(opt, 'nsteps', 0))
         atoms.info['finisher_stop_reason'] = stop_reason
 
+        # Record target distance at the end of the bias phase (before
+        # cleanup) so cleanup reversion is measurable
+        try:
+            fp_bias_end = self.fp_calc.get_fingerprints(atoms)
+            atoms.info['finisher_d_bias_end'] = float(
+                self.target_lib.min_target_distance(fp_bias_end))
+        except (ValueError, RuntimeError):
+            atoms.info['finisher_d_bias_end'] = None
+
         # Phase 3: unbiased cleanup
         atoms = self._unbiased_relax(atoms, base_calc,
                                      cfg.cleanup_max_steps,
