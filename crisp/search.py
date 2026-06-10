@@ -1534,7 +1534,10 @@ class CRISPSearch:
                     group=sg,
                     species=species,
                     numIons=numIons,
-                    factor=np.random.uniform(0.8, 1.2),
+                    # factor < 1.0 makes pyXtal fight the tolerance
+                    # matrix in compressed cells (~100x slower at N=64);
+                    # start slightly expanded — relaxation shrinks cells.
+                    factor=np.random.uniform(1.0, 1.3),
                     tm=self._pyxtal_tm,
                     # Tie pyXtal's internal RNG to the global numpy
                     # stream — without this, runs are unseedable.
