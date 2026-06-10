@@ -111,7 +111,7 @@ def plain_relax(atoms, calc, steps):
 def run_audit(out_dir, n_seeds=6, sigmas=(0.10, 0.20), bias_steps=40,
               cleanup_steps=10, device='cpu'):
     import crisp.cawr as cawr_mod
-    from crisp.cawr import CAWRConfig, cawr_refine
+    from crisp.cawr import CAWRConfig, cawr_refine, cawr_snap, spglib_snap
     from crisp.fingerprint import FingerprintCalculator
     from .runner import make_calc_factory
 
@@ -146,6 +146,12 @@ def run_audit(out_dir, n_seeds=6, sigmas=(0.10, 0.20), bias_steps=40,
                 arms['legacy'] = cawr_refine(pert.copy(), fp_calc, calc,
                                              cfg)
                 cawr_mod.cawr_loss_grad = fixed_grad
+                # J+ FP-space snap (no MLIP calls) + full plain budget
+                snapped = cawr_snap(pert, fp_calc)
+                arms['jsnap'] = plain_relax(snapped, calc, total_steps)
+                # spglib symmetrization snap + full plain budget
+                arms['spgsnap'] = plain_relax(spglib_snap(pert), calc,
+                                              total_steps)
 
                 row = {'system': sys_name, 'sigma': sigma, 'seed': seed,
                        'true_sg': true_sg, 'sg_before': prof0,
@@ -172,7 +178,7 @@ def run_audit(out_dir, n_seeds=6, sigmas=(0.10, 0.20), bias_steps=40,
           f"budget {total_steps} steps/arm, recovery @ symprec<=1e-2)")
     print("=" * 72)
     print(f"{'system':<16} {'sigma':<6} {'plain':<8} {'cawr':<8} "
-          f"{'legacy':<8} {'var red. cawr':<14} {'var red. plain'}")
+          f"{'legacy':<8} {'jsnap':<8} {'spgsnap':<8}")
     for sys_name in AUDIT_SYSTEMS:
         for sigma in sigmas:
             sel = [r for r in rows
@@ -181,7 +187,7 @@ def run_audit(out_dir, n_seeds=6, sigmas=(0.10, 0.20), bias_steps=40,
                 continue
             n = len(sel)
             rec = {a: sum(r[f'recovered_{a}'] for r in sel)
-                   for a in ('plain', 'cawr', 'legacy')}
+                   for a in ('plain', 'cawr', 'legacy', 'jsnap', 'spgsnap')}
             vr = {a: np.mean([1.0 - r[f'fp_var_{a}'] /
                               max(r['fp_var_before'], 1e-30)
                               for r in sel])
@@ -189,12 +195,15 @@ def run_audit(out_dir, n_seeds=6, sigmas=(0.10, 0.20), bias_steps=40,
             print(f"{sys_name:<16} {sigma:<6.2f} "
                   f"{rec['plain']}/{n:<6} {rec['cawr']}/{n:<6} "
                   f"{rec['legacy']}/{n:<6} "
-                  f"{100*vr['cawr']:.0f}%{'':<10} {100*vr['plain']:.0f}%")
+                  f"{rec['jsnap']}/{n:<6} {rec['spgsnap']}/{n:<6} "
+                  f"varred c/p: {100*vr['cawr']:.0f}%/{100*vr['plain']:.0f}%")
     totals = {a: sum(r[f'recovered_{a}'] for r in rows)
-              for a in ('plain', 'cawr', 'legacy')}
+              for a in ('plain', 'cawr', 'legacy', 'jsnap', 'spgsnap')}
     print(f"\nTOTALS: plain {totals['plain']}/{len(rows)}, "
           f"cawr {totals['cawr']}/{len(rows)}, "
-          f"legacy {totals['legacy']}/{len(rows)}")
+          f"legacy {totals['legacy']}/{len(rows)}, "
+          f"jsnap {totals['jsnap']}/{len(rows)}, "
+          f"spgsnap {totals['spgsnap']}/{len(rows)}")
     return rows
 
 

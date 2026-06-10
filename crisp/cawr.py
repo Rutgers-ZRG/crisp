@@ -140,6 +140,85 @@ def cawr_loss_grad(fp, labels):
     return loss, dL_dfp
 
 
+def cawr_snap(atoms, fp_calc, n_iter=3, max_step=0.25,
+              min_dist_ang=1.0, min_k=2, max_k=8):
+    """Direct FP-space symmetrization via the analytical Jacobian.
+
+    Instead of mixing a cluster-equalization bias force into a physical
+    relaxation (which fights the PES), take Newton-like steps in
+    fingerprint space: solve J . dr = (mu_c - fp_i) with the exact
+    Jacobian J = dfp/dr and apply the least-squares displacement
+    directly. Pure geometry — costs no MLIP calls.
+
+    Returns the snapped Atoms (copy); falls back to the input on any
+    failure.
+    """
+    out = atoms.copy()
+    nat = len(out)
+    for _ in range(n_iter):
+        try:
+            fp, dfp = fp_calc.get_fingerprints_and_jacobian(out)
+        except (ValueError, RuntimeError):
+            return out
+        labels, _k = discover_clusters(fp, min_k, max_k)
+        target = fp.copy()
+        for c in np.unique(labels):
+            idx = np.where(labels == c)[0]
+            if len(idx) >= 2:
+                target[idx] = fp[idx].mean(axis=0)
+        delta_fp = (target - fp).reshape(-1)
+        if np.linalg.norm(delta_fp) < 1e-8:
+            break
+        fp_dim = fp.shape[1]
+        J = dfp.transpose(0, 3, 1, 2).reshape(nat * fp_dim, nat * 3)
+        try:
+            delta_r, *_ = np.linalg.lstsq(J, delta_fp, rcond=1e-2)
+        except np.linalg.LinAlgError:
+            return out
+        delta_r = delta_r.reshape(nat, 3)
+        step_max = np.abs(delta_r).max()
+        if step_max > max_step:
+            delta_r *= max_step / step_max
+        trial = out.copy()
+        trial.positions = trial.positions + delta_r
+        d = trial.get_all_distances(mic=True)
+        np.fill_diagonal(d, np.inf)
+        if d.min() < min_dist_ang:
+            break
+        out = trial
+    return out
+
+
+def spglib_snap(atoms, symprecs=(0.05, 0.1, 0.2), max_disp=0.5):
+    """Symmetrize by projecting onto the nearest spacegroup found by
+    spglib at a loose-symprec ladder. Pure geometry, no MLIP calls.
+
+    Picks the loosest symprec whose standardized structure (a) keeps
+    the atom count and (b) moves no atom further than max_disp.
+    """
+    import spglib
+    from ase import Atoms as AseAtoms
+
+    best = None
+    for sp in sorted(symprecs):
+        try:
+            cell = (atoms.cell.array, atoms.get_scaled_positions(),
+                    atoms.get_atomic_numbers())
+            std = spglib.standardize_cell(cell, to_primitive=False,
+                                          no_idealize=False, symprec=sp)
+            if std is None:
+                continue
+            lattice, scaled, numbers = std
+            if len(numbers) != len(atoms):
+                continue
+            snapped = AseAtoms(numbers=numbers, scaled_positions=scaled,
+                               cell=lattice, pbc=True)
+            best = snapped
+        except Exception:
+            continue
+    return best if best is not None else atoms.copy()
+
+
 class CAWRBiasCalculator(Calculator):
     """ASE Calculator that mixes physical forces with CAWR symmetry bias.
 
