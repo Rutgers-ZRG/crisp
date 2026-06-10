@@ -84,3 +84,6 @@ docs/*.log
 docs/*.out
 docs/*.pdf
 docs/*.png
+
+# Local session config (private paths)
+/CLAUDE.md
