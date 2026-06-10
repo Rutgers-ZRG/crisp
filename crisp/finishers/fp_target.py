@@ -32,6 +32,13 @@ from ..targets import Target, TargetLibrary
 
 logger = logging.getLogger(__name__)
 
+def _ascii(msg, limit=80):
+    """ASCII-sanitized truncation for atoms.info strings — error texts
+    can contain non-ASCII (e.g. Angstrom symbols) and extxyz writes
+    crash on ASCII-locale compute nodes."""
+    return str(msg)[:limit].encode("ascii", "replace").decode()
+
+
 
 class _FinisherSafetyStop(Exception):
     """Raised by safety check to stop the bias optimization loop."""
@@ -409,13 +416,14 @@ class FPTargetFinisher:
             stop_reason = "safety_min_dist"
             logger.debug("Finisher: bias phase stopped (safety)")
         except Warning as exc:
-            stop_reason = f"warning:{str(exc)[:80]}"
+            stop_reason = "warning:" + _ascii(str(exc))
             logger.debug("Finisher: bias phase warning: %s", exc)
         except RuntimeError as exc:
-            stop_reason = f"runtime_error:{str(exc)[:80]}"
+            stop_reason = "runtime_error:" + _ascii(str(exc))
             logger.debug("Finisher: bias phase runtime error: %s", exc)
         except Exception as exc:
-            stop_reason = f"exception:{type(exc).__name__}:{str(exc)[:80]}"
+            stop_reason = ("exception:" + type(exc).__name__ + ":"
+                           + _ascii(str(exc)))
             logger.debug("Finisher: bias phase exception: %s", exc)
         atoms.info['finisher_bias_steps'] = int(getattr(opt, 'nsteps', 0))
         atoms.info['finisher_stop_reason'] = stop_reason

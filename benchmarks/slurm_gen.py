@@ -30,6 +30,7 @@ TEMPLATE = """#!/bin/bash
 #SBATCH --output={out_dir}/slurm_{tag}_%j.out
 #SBATCH --requeue
 
+export PYTHONUTF8=1
 export MKL_NUM_THREADS={cpus}
 export OMP_NUM_THREADS={cpus}
 cd {workdir}

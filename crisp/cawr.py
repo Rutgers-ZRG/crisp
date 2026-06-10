@@ -6,7 +6,7 @@ atoms toward their cluster centroid FP — equalizing the local environment
 of symmetry-equivalent atoms.
 
     L_CAWR = Σ_c Σ_{i∈c} ||fp_i - μ_c||²
-    dL/dfp_i = 4·n_c·(fp_i - μ_c)
+    dL/dfp_i = 2·(fp_i - μ_c)
     F_CAWR = -J^T ∇_fp L
 
 Used as a local pretreatment step before HPC (VASP) relaxation:
@@ -33,6 +33,13 @@ except ImportError:
 from .fingerprint import FingerprintCalculator
 
 logger = logging.getLogger(__name__)
+
+def _ascii(msg, limit=80):
+    """ASCII-sanitized truncation for atoms.info strings — error texts
+    can contain non-ASCII (e.g. Angstrom symbols) and extxyz writes
+    crash on ASCII-locale compute nodes."""
+    return str(msg)[:limit].encode("ascii", "replace").decode()
+
 
 _EV_A3_TO_GPA = 160.21766208
 
@@ -379,10 +386,11 @@ def cawr_refine(atoms, fp_calc, base_calc, config=None):
         stop_reason = "safety_min_dist"
         logger.debug("CAWR safety stop triggered")
     except RuntimeError as exc:
-        stop_reason = f"runtime_error:{str(exc)[:80]}"
+        stop_reason = "runtime_error:" + _ascii(str(exc))
         logger.debug("CAWR runtime error: %s", exc)
     except Exception as exc:
-        stop_reason = f"exception:{type(exc).__name__}:{str(exc)[:80]}"
+        stop_reason = ("exception:" + type(exc).__name__ + ":"
+                           + _ascii(str(exc)))
         logger.debug("CAWR exception: %s", exc)
     atoms.info['cawr_bias_steps'] = int(getattr(opt, 'nsteps', 0))
     atoms.info['cawr_stop_reason'] = stop_reason
