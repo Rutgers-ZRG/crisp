@@ -94,7 +94,7 @@ def make_calc_factory(potential: str, device: Optional[str] = None,
 
 
 VARIANTS = ('', 'nocawr', 'nofinisher', 'jsnap', 'gpguided', 'gptune',
-            'strongfin')
+            'strongfin', 'fpjheavy', 'zerotreat')
 
 
 def build_search(spec: SystemSpec, mode: str, calc_factory,
@@ -109,6 +109,10 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
       gpguided   : GP-guided refinement on (fixed lambda=3)
       gptune     : GP hyperparameter auto-tune on
       strongfin  : finisher bias 120 steps, lambda_max 40
+      fpjheavy   : no softmutants, 2x FP-Jacobian mutants (the fponly
+                   mutation mix with the crisp MLIP treatment)
+      zerotreat  : finisher/CAWR on ZeroCalculator with fixed lambda=1
+                   (the fponly treatment with the crisp mutation mix)
     """
     from crisp import CRISPSearch, FingerprintCalculator, CAWRConfig
     from crisp.finishers.fp_target import FinisherConfig
@@ -193,11 +197,25 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             pressure_GPa=spec.pressure_GPa, relax_cell=True,
             anneal_to_zero=True, optimizer="FIRE", min_dist_ang=1.2,
             max_f_bias_rms=50.0)
+        if variant == 'zerotreat':
+            finisher_cfg.pre_steps = 0
+            finisher_cfg.bias_steps = 30
+            finisher_cfg.cleanup_max_steps = 0
+            finisher_cfg.lambda_min = 1.0
+            finisher_cfg.lambda_max = 1.0
+            finisher_cfg.anneal_to_zero = False
+            cawr_cfg.lambda_min = 1.0
+            cawr_cfg.anneal_to_zero = False
+            cawr_cfg.cleanup_steps = 0
         return CRISPSearch(
-            use_mutations=True,
+            treatment_calc_factory=(
+                (lambda: ZeroCalculator()) if variant == 'zerotreat'
+                else None),
+            use_mutations=(variant != 'fpjheavy'),
             n_mutants=spec.n_mutants,
             enable_fpj_mutations=True,
-            n_fpj_mutants=spec.n_mutants,
+            n_fpj_mutants=(2 * spec.n_mutants if variant == 'fpjheavy'
+                           else spec.n_mutants),
             enable_fp_finisher=(variant != 'nofinisher'),
             finisher_config=finisher_cfg,
             n_finisher_targets=8,
