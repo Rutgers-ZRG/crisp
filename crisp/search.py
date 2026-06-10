@@ -49,6 +49,61 @@ logger = logging.getLogger(__name__)
 _EV_A3_TO_GPA = 160.21766208
 
 
+def swap_mutate(atoms: Atoms, fp_calc, rng=None,
+                species_pair: Optional[tuple] = None,
+                rattle: float = 0.05) -> Optional[Atoms]:
+    """FP-guided species-swap mutation.
+
+    Exchanges the chemical species of one atom pair of two different
+    elements, preferring atoms whose fingerprint environment deviates
+    most from their own species' mean (the 'misfits'). Returns None
+    for elemental systems or on FP failure.
+
+    Sampling uses the global numpy stream by default (seedable runs).
+    """
+    symbols = np.array(atoms.get_chemical_symbols())
+    species = sorted(set(symbols))
+    if len(species) < 2:
+        return None
+    if rng is None:
+        rng = np.random
+
+    if species_pair is None:
+        i1, i2 = rng.choice(len(species), size=2, replace=False)
+        species_pair = (species[int(i1)], species[int(i2)])
+    s_a, s_b = species_pair
+    idx_a = np.where(symbols == s_a)[0]
+    idx_b = np.where(symbols == s_b)[0]
+    if len(idx_a) == 0 or len(idx_b) == 0:
+        return None
+
+    try:
+        fp = fp_calc.get_fingerprints(atoms)
+    except (ValueError, RuntimeError):
+        return None
+
+    def pick(idx):
+        sel = fp[idx]
+        misfit = np.linalg.norm(sel - sel.mean(axis=0), axis=1)
+        w = misfit ** 2
+        if w.sum() < 1e-30:
+            return int(idx[int(rng.integers(len(idx)))]) \
+                if hasattr(rng, 'integers') \
+                else int(idx[int(rng.randint(len(idx)))])
+        p = w / w.sum()
+        return int(rng.choice(idx, p=p))
+
+    ia, ib = pick(idx_a), pick(idx_b)
+    out = atoms.copy()
+    syms = out.get_chemical_symbols()
+    syms[ia], syms[ib] = syms[ib], syms[ia]
+    out.set_chemical_symbols(syms)
+    if rattle > 0:
+        out.rattle(rattle, seed=int(rng.choice(2 ** 31))
+                   if hasattr(rng, 'choice') else 0)
+    return out
+
+
 class CRISPSearch:
     """Crystal structure prediction via fingerprint-space GP surrogate.
 
@@ -220,6 +275,8 @@ class CRISPSearch:
         sanity_min_dist: float = 0.6,
         cawr_pretreat_mode: str = "refine",
         gp_auto_tune: bool = False,
+        enable_swap_mutations: bool = False,
+        n_swap_mutants: int = 4,
     ):
         if mlip_calc_factory is None and hpc_relaxer is None:
             raise ValueError(
@@ -324,6 +381,10 @@ class CRISPSearch:
 
         # GP hyperparameter auto-tuning (marginal likelihood)
         self.gp_auto_tune = gp_auto_tune
+
+        # FP-guided species-swap mutations (multi-species systems)
+        self.enable_swap_mutations = enable_swap_mutations
+        self.n_swap_mutants = n_swap_mutants
 
         # GP-guided refinement setup
         self.enable_gp_guided = enable_gp_guided
@@ -492,6 +553,16 @@ class CRISPSearch:
             is_mutant.extend([True] * len(fpj_mutants))
             if fpj_mutants:
                 print(f"  + {len(fpj_mutants)} FP-J mutants = "
+                      f"{len(candidates)} total")
+
+        # Step 1d: FP-guided species-swap mutants (cation ordering)
+        if self.enable_swap_mutations and archive.entries:
+            swap_mutants = self._generate_swap_mutants(
+                archive, self.n_swap_mutants)
+            candidates = candidates + swap_mutants
+            is_mutant.extend([True] * len(swap_mutants))
+            if swap_mutants:
+                print(f"  + {len(swap_mutants)} swap mutants = "
                       f"{len(candidates)} total")
 
         # Step 2: Screen or filter (with coverage guardrails)
@@ -690,6 +761,30 @@ class CRISPSearch:
             selected.append(int(np.argmax(min_dists)))
 
         return [candidates[i] for i in selected]
+
+    def _generate_swap_mutants(self, archive: StructureArchive,
+                               n: int) -> List[Atoms]:
+        """FP-guided species-swap mutants from top archive entries.
+
+        For multi-species systems the cation *arrangement* is a search
+        dimension none of the displacement operators touch (the spinel
+        runs all funneled into a coordination-inverted impostor).
+        """
+        if len(set(self._symbols)) < 2 or n <= 0:
+            return []
+        sorted_entries = sorted(archive.entries, key=lambda e: e.enthalpy)
+        pool = sorted_entries[:min(len(sorted_entries), 10)]
+        mutants = []
+        for _ in range(n * 3):
+            if len(mutants) >= n:
+                break
+            parent = pool[int(np.random.randint(len(pool)))]
+            mut = swap_mutate(parent.atoms, self.fp_calc)
+            if mut is not None:
+                mut.info['origin'] = 'swap_mutant'
+                mut.info['parent_enthalpy'] = float(parent.enthalpy)
+                mutants.append(mut)
+        return mutants
 
     @staticmethod
     def _softmutate(atoms: Atoms, strain_std: float = 0.1,

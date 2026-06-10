@@ -94,7 +94,7 @@ def make_calc_factory(potential: str, device: Optional[str] = None,
 
 
 VARIANTS = ('', 'nocawr', 'nofinisher', 'jsnap', 'gpguided', 'gptune',
-            'strongfin', 'fpjheavy', 'zerotreat')
+            'strongfin', 'fpjheavy', 'zerotreat', 'swap')
 
 
 def build_search(spec: SystemSpec, mode: str, calc_factory,
@@ -113,6 +113,7 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
                    mutation mix with the crisp MLIP treatment)
       zerotreat  : finisher/CAWR on ZeroCalculator with fixed lambda=1
                    (the fponly treatment with the crisp mutation mix)
+      swap       : FP-guided species-swap mutants on (cation ordering)
     """
     from crisp import CRISPSearch, FingerprintCalculator, CAWRConfig
     from crisp.finishers.fp_target import FinisherConfig
@@ -224,6 +225,7 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             cawr_pretreat_mode='snap' if variant == 'jsnap' else 'refine',
             enable_gp_guided=(variant == 'gpguided'),
             gp_auto_tune=(variant == 'gptune'),
+            enable_swap_mutations=(variant == 'swap'),
             gp_energy_margin=0.2, gp_confidence_frac=0.15,
             **common)
 
