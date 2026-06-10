@@ -26,7 +26,7 @@ class SystemSpec:
     pressure_GPa: float
     difficulty: str                       # 'easy' | 'medium' | 'hard'
     refs: Dict[str, Callable[[], Atoms]]  # polymorph name -> builder
-    expected_gs: str                      # literature GS among refs
+    expected_gs: str   # expected GS among refs (must tile composition)
     vol_per_atom_range: tuple
     min_dist_ang: float = 1.5
     dup_threshold: float = 0.03
@@ -245,11 +245,15 @@ SYSTEMS: Dict[str, SystemSpec] = {
         refs={'spinel': spinel_mgal2o4},
         expected_gs='spinel',
         vol_per_atom_range=(6.5, 13.0), min_dist_ang=1.6),
-    'sio2_18': SystemSpec(
-        name='sio2_18', composition={'Si': 6, 'O': 12}, pressure_GPa=0.0,
+    # NOTE: composition must tile the potential's GS cell. On MatterSim
+    # the SiO2 GS is alpha-cristobalite (Z=4, 12 atoms) and quartz is
+    # unstable (collapses to C2), so the cell is 24 atoms (2 cristobalite
+    # cells), not 18 (which only tiles quartz).
+    'sio2_24': SystemSpec(
+        name='sio2_24', composition={'Si': 8, 'O': 16}, pressure_GPa=0.0,
         difficulty='hard',
         refs={'quartz': quartz_alpha, 'cristobalite': cristobalite_alpha},
-        expected_gs='quartz',
+        expected_gs='cristobalite',
         vol_per_atom_range=(9.0, 20.0), min_dist_ang=1.4),
     'mgsio3_20': SystemSpec(
         name='mgsio3_20', composition={'Mg': 4, 'Si': 4, 'O': 12},

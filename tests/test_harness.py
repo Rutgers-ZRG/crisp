@@ -26,7 +26,7 @@ EXPECTED_SG = {
     'b28': {'gamma_b28': 58},
     'tio2_24': {'rutile': 136, 'anatase': 141, 'brookite': 61},
     'spinel': {'spinel': 227},
-    'sio2_18': {'quartz': 152, 'cristobalite': 92},
+    'sio2_24': {'quartz': 152, 'cristobalite': 92},
     'mgsio3_20': {'perovskite': 62, 'ilmenite': 148},
 }
 
