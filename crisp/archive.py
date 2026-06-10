@@ -217,7 +217,8 @@ class StructureArchive:
     # Checkpoint support (GP state serialization)
     # ------------------------------------------------------------------
 
-    def save_checkpoint(self, path: str, gp=None, generation: int = 0) -> None:
+    def save_checkpoint(self, path: str, gp=None, generation: int = 0,
+                        extra_meta: Optional[dict] = None) -> None:
         """Save archive + GP state as a generation checkpoint.
 
         Creates ``path/gen_NNNN/`` with archive data and optional GP state.
@@ -251,6 +252,8 @@ class StructureArchive:
 
         # Write generation metadata
         meta = {"generation": generation, "n_entries": len(self.entries)}
+        if extra_meta:
+            meta.update(extra_meta)
         with open(gen_dir / "checkpoint_meta.json", "w") as f:
             json.dump(meta, f, indent=2)
 
@@ -298,6 +301,7 @@ class StructureArchive:
 
         with open(latest / "checkpoint_meta.json") as f:
             meta = json.load(f)
+        self.last_checkpoint_meta = meta
 
         gen = meta["generation"]
         logger.info("Checkpoint loaded: gen=%d from %s", gen, latest)

@@ -151,6 +151,17 @@ class CRISPSearch:
         Weight for FP-space momentum (0=pure random, 1=pure momentum).
         When a parent's lineage had a successful FP displacement direction,
         the next mutation blends: α·momentum + (1-α)·random.
+    treatment_calc_factory : callable or None
+        Calculator factory for local treatment (finisher/CAWR). Defaults
+        to ``mlip_calc_factory``; pass a ZeroCalculator factory for
+        FP-only treatment.
+    local_relax_mode : str
+        ``'legacy'`` (default): v0.3 GP-confidence flow/biased local relax.
+        ``'plain'``: direct MLIP quench for every candidate — mirrors the
+        HPC pipeline on a single node (use for benchmarks).
+    budget_relax : int or None
+        Stop the search after this many relaxations (checked at
+        generation boundaries; the final generation may overshoot).
     """
 
     def __init__(
@@ -202,6 +213,9 @@ class CRISPSearch:
         enable_gp_guided: bool = False,
         gp_guided_config: Optional[GPGuidedConfig] = None,
         gp_guided_top_n: int = 5,
+        treatment_calc_factory: Optional[Callable] = None,
+        local_relax_mode: str = "legacy",
+        budget_relax: Optional[int] = None,
     ):
         if mlip_calc_factory is None and hpc_relaxer is None:
             raise ValueError(
@@ -257,6 +271,21 @@ class CRISPSearch:
 
         # Detect mode
         self._use_hpc = hpc_relaxer is not None
+
+        # Local treatment calculator (finisher/CAWR). Defaults to the MLIP
+        # factory; set separately for FP-only treatment (e.g. ZeroCalculator).
+        self.treatment_calc_factory = treatment_calc_factory or mlip_calc_factory
+
+        # Local relaxation mode: 'legacy' = GP-confidence flow/biased relax
+        # (v0.3 behavior), 'plain' = direct MLIP quench (mirrors the HPC
+        # pipeline; use for benchmarking on a single node).
+        if local_relax_mode not in ("legacy", "plain"):
+            raise ValueError(f"Unknown local_relax_mode: {local_relax_mode!r}")
+        self.local_relax_mode = local_relax_mode
+
+        # Relaxation accounting / budget
+        self.n_relaxed = 0
+        self.budget_relax = budget_relax
 
         # FP-targeted finisher setup
         self._finisher = None
@@ -315,6 +344,8 @@ class CRISPSearch:
         # Resume from checkpoint
         if resume_from is not None:
             start_gen = archive.load_checkpoint(resume_from, gp=gp) + 1
+            ckpt_meta = getattr(archive, "last_checkpoint_meta", {}) or {}
+            self.n_relaxed = int(ckpt_meta.get("n_relaxed", 0))
             if gp.X_train is not None:
                 anchors = archive.get_diverse(n=3, pool="best", pool_size=10)
                 bias.set_anchors([a.fp_pooled for a in anchors])
@@ -362,7 +393,14 @@ class CRISPSearch:
             # Checkpoint
             if self.checkpoint_dir is not None:
                 archive.save_checkpoint(self.checkpoint_dir, gp=gp,
-                                        generation=gen)
+                                        generation=gen,
+                                        extra_meta={"n_relaxed": self.n_relaxed})
+
+            # Relaxation budget check
+            if self.budget_relax is not None and self.n_relaxed >= self.budget_relax:
+                print(f"Budget reached: {self.n_relaxed} relaxations "
+                      f"(budget {self.budget_relax}).")
+                break
 
             # Convergence check
             if gen > 0:
@@ -483,6 +521,9 @@ class CRISPSearch:
         if self._use_hpc:
             new_count = self._relax_batch_hpc(candidates, archive,
                                                generation=gen)
+        elif self.local_relax_mode == "plain":
+            new_count = self._relax_batch_local(candidates, archive,
+                                                generation=gen)
         else:
             new_count = self._relax_batch_local_with_bias(
                 candidates, archive, gp, bias, projector, gen
@@ -992,9 +1033,9 @@ class CRISPSearch:
         if self._finisher is None:
             return candidates, is_mutant
 
-        if self.mlip_calc_factory is None:
-            logger.warning("FP finisher requires mlip_calc_factory but none provided "
-                           "(HPC-only mode). Skipping finisher.")
+        if self.treatment_calc_factory is None:
+            logger.warning("FP finisher requires a treatment calculator but "
+                           "none provided (HPC-only mode). Skipping finisher.")
             return candidates, is_mutant
 
         n_finished = 0
@@ -1003,7 +1044,7 @@ class CRISPSearch:
             if not self._finisher.should_run(atoms, gen, is_mutant=mutant_flag):
                 atoms.info['finisher_applied'] = False
                 continue
-            calc = self.mlip_calc_factory()
+            calc = self.treatment_calc_factory()
             try:
                 candidates[i] = self._finisher.run(
                     atoms, calc, is_mutant=mutant_flag,
@@ -1037,11 +1078,11 @@ class CRISPSearch:
         Runs locally with MLIP (fast, ~1-2s per structure).
         """
         import gc
-        if self._cawr_config is None or self.mlip_calc_factory is None:
+        if self._cawr_config is None or self.treatment_calc_factory is None:
             return candidates
         n_refined = 0
         for i, atoms in enumerate(candidates):
-            calc = self.mlip_calc_factory()
+            calc = self.treatment_calc_factory()
             try:
                 candidates[i] = cawr_refine(
                     atoms, self.fp_calc, calc, self._cawr_config)
@@ -1245,29 +1286,16 @@ class CRISPSearch:
 
         new_count = 0
         for job in jobs:
+            self.n_relaxed += 1
             if job.status != "completed":
                 continue
             if job.atoms_out is None or job.energy is None:
                 continue
             try:
                 # Propagate provenance from atoms.info to archive metadata
-                meta = {"generation": generation,
-                        "struct_idx": job.struct_idx}
-                provenance_keys = [
-                    'origin', 'spacegroup', 'parent_enthalpy', 'parent_rank',
-                    'mutation_strain_std', 'mutation_pos_std',
-                    'fpj_target_d', 'fpj_strain_std',
-                    'stagnation_count',
-                    'finisher_applied', 'finisher_target',
-                    'finisher_d_init', 'finisher_d_final',
-                    'finisher_mode', 'finisher_repel',
-                    'cawr_applied',
-                    'fpj_has_momentum',
-                ]
-                for key in provenance_keys:
-                    val = job.atoms_in.info.get(key)
-                    if val is not None:
-                        meta[key] = val
+                meta = self._provenance_meta(job.atoms_in, generation)
+                meta["struct_idx"] = job.struct_idx
+                meta["relax_index"] = self.n_relaxed
                 added = archive.add(
                     job.atoms_out, job.energy, job.enthalpy,
                     self.pressure_GPa,
@@ -1288,20 +1316,48 @@ class CRISPSearch:
     # Local relaxation (legacy)
     # ------------------------------------------------------------------
 
+    _PROVENANCE_KEYS = [
+        'origin', 'spacegroup', 'parent_enthalpy', 'parent_rank',
+        'mutation_strain_std', 'mutation_pos_std',
+        'fpj_target_d', 'fpj_strain_std',
+        'stagnation_count',
+        'finisher_applied', 'finisher_target',
+        'finisher_d_init', 'finisher_d_final',
+        'finisher_mode', 'finisher_repel',
+        'finisher_bias_steps', 'finisher_stop_reason',
+        'cawr_applied', 'cawr_bias_steps', 'cawr_stop_reason',
+        'fpj_has_momentum',
+    ]
+
+    def _provenance_meta(self, atoms: Atoms, generation: int) -> dict:
+        """Collect provenance from atoms.info into archive metadata."""
+        meta = {"generation": generation}
+        for key in self._PROVENANCE_KEYS:
+            val = atoms.info.get(key)
+            if val is not None:
+                meta[key] = val
+        return meta
+
     def _relax_batch_local(self, candidates: List[Atoms],
                            archive: StructureArchive,
                            generation: int) -> int:
-        """Relax candidates locally with pure MLIP (bootstrap)."""
+        """Relax candidates locally with pure MLIP."""
         new_count = 0
         for ci, atoms in enumerate(candidates):
+            meta = self._provenance_meta(atoms, generation)
             try:
                 atoms, h, e, v = self._mlip_quench(atoms)
+                self.n_relaxed += 1
+                meta["relax_index"] = self.n_relaxed
                 added = archive.add(atoms, e, h, self.pressure_GPa,
-                                    metadata={"generation": generation})
+                                    metadata=meta)
                 if added:
                     new_count += 1
+                    if self.enable_fpj_mutations:
+                        self._update_momentum(atoms, archive)
             except Exception as exc:
-                logger.warning("Bootstrap candidate %d failed: %s", ci, exc)
+                self.n_relaxed += 1
+                logger.warning("Candidate %d relaxation failed: %s", ci, exc)
         return new_count
 
     def _relax_batch_local_with_bias(self, candidates: List[Atoms],
@@ -1312,6 +1368,7 @@ class CRISPSearch:
         """Legacy local mode: process + quench each candidate serially."""
         new_count = 0
         for ci, atoms in enumerate(candidates):
+            meta = self._provenance_meta(atoms, gen)
             try:
                 atoms = self._process_candidate(atoms, gp, bias,
                                                  projector, gen)
@@ -1321,12 +1378,15 @@ class CRISPSearch:
 
             try:
                 atoms, h, e, v = self._mlip_quench(atoms)
+                self.n_relaxed += 1
             except Exception as exc:
+                self.n_relaxed += 1
                 logger.warning("Quench failed for candidate %d: %s", ci, exc)
                 continue
 
+            meta["relax_index"] = self.n_relaxed
             added = archive.add(atoms, e, h, self.pressure_GPa,
-                                metadata={"generation": gen})
+                                metadata=meta)
             if added:
                 new_count += 1
 
@@ -1413,6 +1473,9 @@ class CRISPSearch:
                     species=species,
                     numIons=numIons,
                     factor=np.random.uniform(0.8, 1.2),
+                    # Tie pyXtal's internal RNG to the global numpy
+                    # stream — without this, runs are unseedable.
+                    random_state=int(np.random.randint(2 ** 31)),
                 )
                 atoms = xtal.to_ase()
                 if len(atoms) != self._nat:
