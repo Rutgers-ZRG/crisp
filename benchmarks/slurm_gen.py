@@ -74,14 +74,16 @@ def main():
     for system in args.systems:
         spec = SYSTEMS[system]
         # Ensure the generation cap cannot end the run before the
-        # relaxation budget (random mode only relaxes n_random/gen).
+        # relaxation budget. GP-filter skips and failed relaxations
+        # shrink the per-generation relaxation count, so apply a 1.6x
+        # headroom factor — budget_relax terminates the run anyway.
         per_gen = {'random': spec.n_random,
                    'fponly': spec.n_random + spec.n_mutants + 5,
                    'crisp': spec.n_random + 2 * spec.n_mutants}
         for potential in args.potentials:
             for mode in args.modes:
                 max_gens = max(spec.max_generations,
-                               -(-args.budget // per_gen[mode]) + 2)
+                               int(1.6 * args.budget / per_gen[mode]) + 2)
                 mode_label = (f"{mode}-{args.variant}"
                               if args.variant and mode == 'crisp' else mode)
                 variant_arg = (f"--variant {args.variant} "
