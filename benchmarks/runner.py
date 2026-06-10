@@ -220,6 +220,7 @@ def _config_echo(search) -> dict:
     echo['finisher'] = search._finisher is not None
     echo['cawr'] = search._cawr_config is not None
     echo['gp_guided'] = search.enable_gp_guided
+    echo['sanity_H_floor'] = search.sanity_H_floor
     return echo
 
 
@@ -249,6 +250,14 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
                                      model_path=model_path)
     search = build_search(spec, mode, calc_factory, budget_relax,
                           max_gens, ckpt_dir)
+
+    # PES-poisoning floor from calibration (H_ref - 0.5 eV/at)
+    cal_file_early = calibration or os.path.join(
+        out_dir, f"calibration_{potential}.json")
+    if os.path.isfile(cal_file_early):
+        cal_all = json.load(open(cal_file_early))
+        if spec.name in cal_all and cal_all[spec.name].get('H_ref') is not None:
+            search.sanity_H_floor = cal_all[spec.name]['H_ref'] - 0.5
 
     resume_from = ckpt_dir if os.path.isdir(ckpt_dir) and \
         any(p.startswith('gen_') for p in os.listdir(ckpt_dir)) else None

@@ -216,6 +216,8 @@ class CRISPSearch:
         treatment_calc_factory: Optional[Callable] = None,
         local_relax_mode: str = "legacy",
         budget_relax: Optional[int] = None,
+        sanity_H_floor: Optional[float] = None,
+        sanity_min_dist: float = 0.6,
     ):
         if mlip_calc_factory is None and hpc_relaxer is None:
             raise ValueError(
@@ -286,6 +288,14 @@ class CRISPSearch:
         # Relaxation accounting / budget
         self.n_relaxed = 0
         self.budget_relax = budget_relax
+
+        # Archive sanity guard (PES-poisoning protection): reject relaxed
+        # structures with enthalpy below sanity_H_floor (eV/at; set from
+        # a calibrated reference, e.g. H_ref - 0.5) or with interatomic
+        # distances below sanity_min_dist (collapsed structures).
+        self.sanity_H_floor = sanity_H_floor
+        self.sanity_min_dist = sanity_min_dist
+        self.n_rejected_sanity = 0
 
         # FP-targeted finisher setup
         self._finisher = None
@@ -1291,6 +1301,10 @@ class CRISPSearch:
                 continue
             if job.atoms_out is None or job.energy is None:
                 continue
+            if not self._sanity_ok(job.atoms_out,
+                                   job.enthalpy if job.enthalpy is not None
+                                   else job.energy):
+                continue
             try:
                 # Propagate provenance from atoms.info to archive metadata
                 meta = self._provenance_meta(job.atoms_in, generation)
@@ -1330,6 +1344,33 @@ class CRISPSearch:
         'fpj_has_momentum',
     ]
 
+    def _sanity_ok(self, atoms: Atoms, h: float) -> bool:
+        """PES-poisoning guard for relaxed structures.
+
+        Rejects absurdly low enthalpies (below sanity_H_floor) and
+        collapsed structures (min interatomic distance below
+        sanity_min_dist) so a poisoned PES region cannot take over the
+        archive and the GP.
+        """
+        if self.sanity_H_floor is not None and h < self.sanity_H_floor:
+            self.n_rejected_sanity += 1
+            logger.warning("Sanity guard: rejected H=%.3f eV/at "
+                           "(< floor %.3f) — possible PES poisoning",
+                           h, self.sanity_H_floor)
+            return False
+        try:
+            d = atoms.get_all_distances(mic=True)
+            np.fill_diagonal(d, np.inf)
+            if d.min() < self.sanity_min_dist:
+                self.n_rejected_sanity += 1
+                logger.warning("Sanity guard: rejected min_dist=%.2f A "
+                               "(< %.2f) — collapsed structure",
+                               d.min(), self.sanity_min_dist)
+                return False
+        except Exception:
+            pass
+        return True
+
     def _provenance_meta(self, atoms: Atoms, generation: int) -> dict:
         """Collect provenance from atoms.info into archive metadata."""
         meta = {"generation": generation}
@@ -1349,6 +1390,8 @@ class CRISPSearch:
             try:
                 atoms, h, e, v = self._mlip_quench(atoms)
                 self.n_relaxed += 1
+                if not self._sanity_ok(atoms, h):
+                    continue
                 meta["relax_index"] = self.n_relaxed
                 added = archive.add(atoms, e, h, self.pressure_GPa,
                                     metadata=meta)
@@ -1385,6 +1428,8 @@ class CRISPSearch:
                 logger.warning("Quench failed for candidate %d: %s", ci, exc)
                 continue
 
+            if not self._sanity_ok(atoms, h):
+                continue
             meta["relax_index"] = self.n_relaxed
             added = archive.add(atoms, e, h, self.pressure_GPa,
                                 metadata=meta)
@@ -1462,6 +1507,22 @@ class CRISPSearch:
                         len(self._compatible_sgs),
                         dict(zip(species, numIons)))
 
+        # Pre-cache a pyXtal tolerance matrix enforcing min_dist_ang at
+        # generation time. Without it, large-N acceptance collapses
+        # (e.g. 3% at N=64 with min_dist=1.8) because contacts are only
+        # rejected after the full generation attempt.
+        if not hasattr(self, "_pyxtal_tm"):
+            self._pyxtal_tm = None
+            try:
+                from pyxtal.tolerance import Tol_matrix
+                tm = Tol_matrix(prototype="atomic")
+                for i, s1 in enumerate(species):
+                    for s2 in species[i:]:
+                        tm.set_tol(s1, s2, self.min_dist_ang)
+                self._pyxtal_tm = tm
+            except Exception as exc:
+                logger.debug("Tol_matrix unavailable: %s", exc)
+
         attempts = 0
         while len(structures) < n and attempts < max_attempts:
             attempts += 1
@@ -1474,6 +1535,7 @@ class CRISPSearch:
                     species=species,
                     numIons=numIons,
                     factor=np.random.uniform(0.8, 1.2),
+                    tm=self._pyxtal_tm,
                     # Tie pyXtal's internal RNG to the global numpy
                     # stream — without this, runs are unseedable.
                     random_state=int(np.random.randint(2 ** 31)),
