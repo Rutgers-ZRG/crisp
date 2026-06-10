@@ -164,6 +164,16 @@ class StructureArchive:
     # Persistence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _json_default(o):
+        """Serialize numpy scalars/arrays (e.g. float32 energies from
+        GPU calculators — np.float32 is not a Python float subclass)."""
+        if hasattr(o, "item") and not hasattr(o, "__len__"):
+            return o.item()
+        if hasattr(o, "tolist"):
+            return o.tolist()
+        return str(o)
+
     def save(self, path: str) -> None:
         """Save archive to a directory: structures as extxyz, metadata as JSON."""
         dirpath = Path(path)
@@ -184,7 +194,7 @@ class StructureArchive:
 
         meta_file = dirpath / "archive_meta.json"
         with open(meta_file, "w") as f:
-            json.dump(meta_list, f, indent=2)
+            json.dump(meta_list, f, indent=2, default=self._json_default)
         logger.info("Archive saved to %s (%d structures)", path, len(self.entries))
 
     def load(self, path: str) -> None:
@@ -255,7 +265,7 @@ class StructureArchive:
         if extra_meta:
             meta.update(extra_meta)
         with open(gen_dir / "checkpoint_meta.json", "w") as f:
-            json.dump(meta, f, indent=2)
+            json.dump(meta, f, indent=2, default=self._json_default)
 
         logger.info("Checkpoint saved: gen=%d, %d structures → %s",
                      generation, len(self.entries), gen_dir)

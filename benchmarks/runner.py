@@ -190,6 +190,15 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
     raise ValueError(f"Unknown mode: {mode!r}")
 
 
+def _json_default(o):
+    """numpy scalars (float32 from GPU calcs) and arrays -> JSON."""
+    if hasattr(o, "item") and not hasattr(o, "__len__"):
+        return o.item()
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    return str(o)
+
+
 def _gen0_fp_hash(archive) -> str:
     """Determinism witness: hash of gen-0 structures in relax order."""
     h = hashlib.sha1()
@@ -286,7 +295,7 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
         result['ref_name'] = cal.get('gs_name')
         result['ref_H'] = cal.get('H_ref')
         with open(os.path.join(out_dir, f"{tag}_records.json"), 'w') as f:
-            json.dump(records, f, indent=1)
+            json.dump(records, f, indent=1, default=_json_default)
 
     # Persist archive + result
     try:
@@ -294,7 +303,7 @@ def run_benchmark(system: str, potential: str, mode: str, seed: int,
     except Exception as exc:
         logger.warning("Archive save failed: %s", exc)
     with open(os.path.join(out_dir, f"{tag}.json"), 'w') as f:
-        json.dump(result, f, indent=2)
+        json.dump(result, f, indent=2, default=_json_default)
     return result
 
 
