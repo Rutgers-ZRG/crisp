@@ -31,7 +31,8 @@ class ExactGP:
 
     def __init__(self, kernel: str = "rbf", length_scale: float = 1.0,
                  signal_var: float = 1.0, noise: float = 1e-3,
-                 normalize_y: bool = True):
+                 normalize_y: bool = True, auto_tune: bool = False,
+                 auto_tune_min_points: int = 10):
         if kernel != "rbf":
             raise ValueError(f"Unsupported kernel: {kernel!r}. Use 'rbf'.")
         self.kernel = kernel
@@ -39,6 +40,8 @@ class ExactGP:
         self.signal_var = signal_var
         self.noise = noise
         self.normalize_y = normalize_y
+        self.auto_tune = auto_tune
+        self.auto_tune_min_points = auto_tune_min_points
 
         # Set after training
         self.X_train: Optional[np.ndarray] = None  # (N, d)
@@ -116,6 +119,11 @@ class ExactGP:
             self._y_std = 1.0
             self.y_train = np.array(y, dtype=np.float64)
 
+        # Optional hyperparameter selection by log marginal likelihood
+        # over a data-scaled grid (median pairwise distance heuristic).
+        if self.auto_tune and N >= self.auto_tune_min_points:
+            self._tune_hyperparameters()
+
         # Kernel matrix + regularization
         K = self._kernel_matrix(self.X_train, self.X_train)
         K += self.noise * np.eye(N)
@@ -133,6 +141,52 @@ class ExactGP:
 
         logger.info("GP trained on %d points (l=%.3f, sf2=%.3f, sn2=%.3e)",
                      N, self.length_scale, self.signal_var, self.noise)
+
+    def _log_marginal_likelihood(self, length_scale: float,
+                                 noise: float) -> float:
+        """Log marginal likelihood of the (normalized) training targets."""
+        N = self.X_train.shape[0]
+        sq = np.sum((self.X_train[:, None, :] -
+                     self.X_train[None, :, :]) ** 2, axis=2)
+        K = self.signal_var * np.exp(-sq / (2.0 * length_scale ** 2))
+        K += noise * np.eye(N)
+        try:
+            L = np.linalg.cholesky(K)
+        except np.linalg.LinAlgError:
+            return -np.inf
+        alpha = np.linalg.solve(L.T, np.linalg.solve(L, self.y_train))
+        return float(-0.5 * self.y_train @ alpha
+                     - np.sum(np.log(np.diag(L)))
+                     - 0.5 * N * np.log(2.0 * np.pi))
+
+    def _tune_hyperparameters(self) -> None:
+        """Grid-select length_scale (and noise) by marginal likelihood.
+
+        The grid is scaled to the data: multiples of the median pairwise
+        distance, which adapts across systems with very different pooled-
+        fingerprint scales (a fixed l=1.0 cannot).
+        """
+        sq = np.sum((self.X_train[:, None, :] -
+                     self.X_train[None, :, :]) ** 2, axis=2)
+        d = np.sqrt(sq[np.triu_indices_from(sq, k=1)])
+        d = d[d > 1e-12]
+        if d.size == 0:
+            return
+        med = float(np.median(d))
+        ls_grid = med * np.array([0.125, 0.25, 0.5, 1.0, 2.0, 4.0])
+        noise_grid = [1e-4, 1e-3, 1e-2]
+
+        best = (-np.inf, self.length_scale, self.noise)
+        for ls in ls_grid:
+            for nz in noise_grid:
+                lml = self._log_marginal_likelihood(ls, nz)
+                if lml > best[0]:
+                    best = (lml, float(ls), float(nz))
+        if np.isfinite(best[0]):
+            self.length_scale, self.noise = best[1], best[2]
+            logger.info("GP auto-tune: l=%.4f noise=%.0e (lml=%.2f, "
+                        "median d=%.4f)", self.length_scale, self.noise,
+                        best[0], med)
 
     # ------------------------------------------------------------------
     # Prediction
