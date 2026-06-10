@@ -73,7 +73,9 @@ def calibrate_system(spec, calc_factory, out_dir, potential,
             sg_number(best_atoms, 5e-2)
         ref_file = os.path.join(
             out_dir, f"ref_{spec.name}_{potential}.extxyz")
-        ase_write(ref_file, best_atoms)
+        # copy() drops the (shared) calculator — its stale per-atom
+        # results would otherwise corrupt the extxyz write
+        ase_write(ref_file, best_atoms.copy())
         record['ref_file'] = ref_file
     return record
 

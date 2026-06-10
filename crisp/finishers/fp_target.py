@@ -398,14 +398,27 @@ class FPTargetFinisher:
         opt.attach(_SafetyCheck(atoms, cfg.min_dist_ang), interval=1)
 
         import warnings
+        stop_reason = "completed"
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("error", message="Casting complex")
-                opt.run(fmax=0.01, steps=cfg.bias_steps)
-        except (_FinisherSafetyStop, RuntimeError, Warning):
-            logger.debug("Finisher: bias phase stopped (safety/numerical)")
+                converged = opt.run(fmax=0.01, steps=cfg.bias_steps)
+                if converged:
+                    stop_reason = "converged"
+        except _FinisherSafetyStop:
+            stop_reason = "safety_min_dist"
+            logger.debug("Finisher: bias phase stopped (safety)")
+        except Warning as exc:
+            stop_reason = f"warning:{str(exc)[:80]}"
+            logger.debug("Finisher: bias phase warning: %s", exc)
+        except RuntimeError as exc:
+            stop_reason = f"runtime_error:{str(exc)[:80]}"
+            logger.debug("Finisher: bias phase runtime error: %s", exc)
         except Exception as exc:
+            stop_reason = f"exception:{type(exc).__name__}:{str(exc)[:80]}"
             logger.debug("Finisher: bias phase exception: %s", exc)
+        atoms.info['finisher_bias_steps'] = int(getattr(opt, 'nsteps', 0))
+        atoms.info['finisher_stop_reason'] = stop_reason
 
         # Phase 3: unbiased cleanup
         atoms = self._unbiased_relax(atoms, base_calc,

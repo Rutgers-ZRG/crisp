@@ -1326,6 +1326,7 @@ class CRISPSearch:
         'finisher_mode', 'finisher_repel',
         'finisher_bias_steps', 'finisher_stop_reason',
         'cawr_applied', 'cawr_bias_steps', 'cawr_stop_reason',
+        'cawr_bias_failures',
         'fpj_has_momentum',
     ]
 

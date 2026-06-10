@@ -133,6 +133,7 @@ class CAWRBiasCalculator(Calculator):
         self._last_k = None
         self._f_bias = None
         self._e_bias = 0.0
+        self.n_bias_fail = 0
 
     def calculate(self, atoms=None, properties=None,
                   system_changes=tuple(all_changes)):
@@ -205,6 +206,7 @@ class CAWRBiasCalculator(Calculator):
             self.results["stress"] = s_phys + lam * s_bias
 
         except Exception as exc:
+            self.n_bias_fail += 1
             logger.debug("CAWR bias failed (step %d): %s", self._step, exc)
             self.results["energy"] = e_phys
             self.results["forces"] = f_phys
@@ -270,10 +272,23 @@ def cawr_refine(atoms, fp_calc, base_calc, config=None):
 
     opt.attach(_SafetyCheck(atoms, config.min_dist_ang), interval=1)
 
+    stop_reason = "completed"
     try:
-        opt.run(fmax=0.01, steps=config.max_steps)
-    except (_CAWRSafetyStop, RuntimeError):
+        converged = opt.run(fmax=0.01, steps=config.max_steps)
+        if converged:
+            stop_reason = "converged"
+    except _CAWRSafetyStop:
+        stop_reason = "safety_min_dist"
         logger.debug("CAWR safety stop triggered")
+    except RuntimeError as exc:
+        stop_reason = f"runtime_error:{str(exc)[:80]}"
+        logger.debug("CAWR runtime error: %s", exc)
+    except Exception as exc:
+        stop_reason = f"exception:{type(exc).__name__}:{str(exc)[:80]}"
+        logger.debug("CAWR exception: %s", exc)
+    atoms.info['cawr_bias_steps'] = int(getattr(opt, 'nsteps', 0))
+    atoms.info['cawr_stop_reason'] = stop_reason
+    atoms.info['cawr_bias_failures'] = int(cawr_calc.n_bias_fail)
 
     k = cawr_calc._last_k or 0
 
