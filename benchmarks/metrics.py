@@ -1,15 +1,24 @@
 """Success detection and per-run metrics for the benchmark harness.
 
-Success criteria (first relaxed structure that satisfies either):
-  1. d_fp(structure, potential-relaxed GS reference) < spec.success_dfp
-     (requires matching atom counts), OR
-  2. |H - H_ref| < spec.success_dH_meV AND spglib spacegroup matches the
-     relaxed GS reference (enantiomorphs count as matches), at any
-     symprec in SYMPRECS.
+Success (strict): the first relaxed structure with
+    |H - H_ref| < spec.success_dH_meV   AND
+    (spglib spacegroup matches the GS reference at any symprec in
+     SYMPRECS (enantiomorphs equivalent)  OR  d_fp < spec.success_dfp).
 
-The reference is always the *potential's own* ground state from
-calibration, so the criterion is well-defined even when the potential
-disagrees with the literature.
+The energy gate is mandatory: per-atom Hungarian FP distances compress
+badly for multi-species systems (impostors 0.3-3 eV/at away can sit at
+d_fp ~ 0.02, below any useful standalone threshold — measured on the
+2026-06 probe runs), so d_fp/spacegroup only adjudicate *identity among
+energy-degenerate* structures.
+
+A secondary tier `success_energy` (energy gate alone) is also reported
+— it counts "found the GS energy level", which may be a degenerate
+distinct framework.
+
+The reference is the *potential's own* ground state from calibration
+(possibly an empirically discovered one — see recalibrate.py), so the
+criterion is well-defined even when the potential disagrees with the
+literature.
 """
 
 import logging
@@ -20,7 +29,10 @@ from ase import Atoms
 
 logger = logging.getLogger(__name__)
 
-SYMPRECS = (1e-3, 1e-2, 5e-2)
+# 1e-1 included: relaxations at fmax=0.05 leave sub-meV distortions that
+# break tight-tolerance symmetry detection (measured: anatase found by
+# search reads SG 43/70 below 0.1, SG 141 at 0.1).
+SYMPRECS = (1e-3, 1e-2, 5e-2, 1e-1)
 
 # The 11 enantiomorphic space-group pairs
 _ENANTIOMORPHS = {
@@ -100,7 +112,7 @@ def build_records(entries, ref_fp: Optional[np.ndarray],
         dH_meV = abs(e.enthalpy - ref_H) * 1000.0
         # Spacegroup match only evaluated when the cheap dH gate passes
         matched = False
-        if dH_meV < 50.0:
+        if dH_meV < 20.0:
             for sp in SYMPRECS:
                 if sg_matches(sg_number(e.atoms, sp), ref_sg):
                     matched = True
@@ -118,11 +130,18 @@ def build_records(entries, ref_fp: Optional[np.ndarray],
 
 def detect_success_from_records(records: List[dict], success_dfp: float,
                                 success_dH_meV: float) -> dict:
-    """First record meeting the success criteria; summary stats."""
+    """First record meeting the success criteria; summary stats.
+
+    Strict success: dH < success_dH_meV AND (sg_match OR d_fp < dfp).
+    Energy success: dH < success_dH_meV alone (degenerate frameworks
+    count).
+    """
     out = {
         'success': False,
         'n_relaxed_at_success': None,
         'gen_at_success': None,
+        'success_energy': False,
+        'n_relaxed_at_energy_hit': None,
         'd_fp_best': None,
         'dH_best_meV': None,
     }
@@ -130,8 +149,11 @@ def detect_success_from_records(records: List[dict], success_dfp: float,
         out['d_fp_best'] = min(r['d_fp'] for r in records)
         out['dH_best_meV'] = min(r['dH_meV'] for r in records)
     for r in records:
-        hit = (r['d_fp'] < success_dfp) or \
-              (r['dH_meV'] < success_dH_meV and r['sg_match'])
+        energy_ok = r['dH_meV'] < success_dH_meV
+        if energy_ok and not out['success_energy']:
+            out['success_energy'] = True
+            out['n_relaxed_at_energy_hit'] = r['relax_index']
+        hit = energy_ok and (r['sg_match'] or r['d_fp'] < success_dfp)
         if hit:
             out['success'] = True
             out['n_relaxed_at_success'] = r['relax_index']

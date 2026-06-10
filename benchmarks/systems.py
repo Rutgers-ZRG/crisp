@@ -238,13 +238,15 @@ SYSTEMS: Dict[str, SystemSpec] = {
         refs={'rutile': tio2_rutile, 'anatase': tio2_anatase,
               'brookite': tio2_brookite},
         expected_gs='rutile',
-        vol_per_atom_range=(8.0, 16.0), min_dist_ang=1.6),
+        vol_per_atom_range=(8.0, 16.0), min_dist_ang=1.6,
+        success_dfp=0.0),
     'spinel': SystemSpec(
         name='spinel', composition={'Mg': 2, 'Al': 4, 'O': 8},
         pressure_GPa=0.0, difficulty='medium',
         refs={'spinel': spinel_mgal2o4},
         expected_gs='spinel',
-        vol_per_atom_range=(6.5, 13.0), min_dist_ang=1.6),
+        vol_per_atom_range=(6.5, 13.0), min_dist_ang=1.6,
+        success_dfp=0.0),
     # NOTE: composition must tile the potential's GS cell. On MatterSim
     # the SiO2 GS is alpha-cristobalite (Z=4, 12 atoms) and quartz is
     # unstable (collapses to C2), so the cell is 24 atoms (2 cristobalite
@@ -254,12 +256,33 @@ SYSTEMS: Dict[str, SystemSpec] = {
         difficulty='hard',
         refs={'quartz': quartz_alpha, 'cristobalite': cristobalite_alpha},
         expected_gs='cristobalite',
-        vol_per_atom_range=(9.0, 20.0), min_dist_ang=1.4),
+        vol_per_atom_range=(9.0, 20.0), min_dist_ang=1.4,
+        success_dfp=0.0),
     'mgsio3_20': SystemSpec(
         name='mgsio3_20', composition={'Mg': 4, 'Si': 4, 'O': 12},
         pressure_GPa=30.0, difficulty='hard',
         refs={'perovskite': mgsio3_perovskite,
               'ilmenite': mgsio3_ilmenite},
         expected_gs='perovskite',
-        vol_per_atom_range=(5.0, 11.0), min_dist_ang=1.4),
+        vol_per_atom_range=(5.0, 11.0), min_dist_ang=1.4,
+        success_dfp=0.0),
+    # Escalated sizes: at 18-24 atoms random+pyXtal solves the oxides in
+    # <30 relaxations (2026-06 probes) because spacegroup-sampled
+    # generation lands in the GS directly. Larger cells multiply the
+    # Wyckoff combinatorics and glassy minima.
+    'sio2_48': SystemSpec(
+        name='sio2_48', composition={'Si': 16, 'O': 32}, pressure_GPa=0.0,
+        difficulty='hard',
+        refs={'quartz': quartz_alpha, 'cristobalite': cristobalite_alpha},
+        expected_gs='cristobalite',
+        vol_per_atom_range=(9.0, 20.0), min_dist_ang=1.4,
+        success_dfp=0.0, n_random=12, n_mutants=4),
+    'mgsio3_40': SystemSpec(
+        name='mgsio3_40', composition={'Mg': 8, 'Si': 8, 'O': 24},
+        pressure_GPa=30.0, difficulty='hard',
+        refs={'perovskite': mgsio3_perovskite,
+              'ilmenite': mgsio3_ilmenite},
+        expected_gs='perovskite',
+        vol_per_atom_range=(5.0, 11.0), min_dist_ang=1.4,
+        success_dfp=0.0, n_random=12, n_mutants=4),
 }

@@ -28,6 +28,8 @@ EXPECTED_SG = {
     'spinel': {'spinel': 227},
     'sio2_24': {'quartz': 152, 'cristobalite': 92},
     'mgsio3_20': {'perovskite': 62, 'ilmenite': 148},
+    'sio2_48': {'quartz': 152, 'cristobalite': 92},
+    'mgsio3_40': {'perovskite': 62, 'ilmenite': 148},
 }
 
 
@@ -99,7 +101,8 @@ class TestMetrics(unittest.TestCase):
 
     def test_detect_success_dh_requires_sg(self):
         from benchmarks.metrics import detect_success_from_records
-        # Low dH alone (degenerate impostor) must NOT count without SG match
+        # Low dH alone (degenerate distinct framework): energy-tier
+        # success only, not strict success
         records = [
             {'relax_index': 1, 'generation': 0, 'd_fp': 0.3, 'dH_meV': 2.0, 'sg_match': False},
         ]
@@ -107,6 +110,22 @@ class TestMetrics(unittest.TestCase):
                                           success_dH_meV=5.0)
         self.assertFalse(out['success'])
         self.assertIsNone(out['n_relaxed_at_success'])
+        self.assertTrue(out['success_energy'])
+        self.assertEqual(out['n_relaxed_at_energy_hit'], 1)
+
+    def test_small_dfp_impostor_with_bad_energy_is_not_success(self):
+        from benchmarks.metrics import detect_success_from_records
+        # Measured on real probes: multi-species FP distances compress —
+        # structures 0.3-3 eV/at away can sit at d_fp ~ 0.02. The energy
+        # gate must kill them.
+        records = [
+            {'relax_index': 1, 'generation': 0, 'd_fp': 0.019,
+             'dH_meV': 652.6, 'sg_match': False},
+        ]
+        out = detect_success_from_records(records, success_dfp=0.05,
+                                          success_dH_meV=5.0)
+        self.assertFalse(out['success'])
+        self.assertFalse(out['success_energy'])
 
     def test_detect_success_none(self):
         from benchmarks.metrics import detect_success_from_records
