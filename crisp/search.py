@@ -49,6 +49,27 @@ logger = logging.getLogger(__name__)
 _EV_A3_TO_GPA = 160.21766208
 
 
+class _ZeroCalculator:
+    """Minimal zero-force ASE-compatible calculator for FP-only
+    finisher kicks (forces come purely from the FP bias)."""
+
+    def __new__(cls):
+        from ase.calculators.calculator import Calculator, all_changes
+
+        class _Zero(Calculator):
+            implemented_properties = ["energy", "forces", "stress"]
+
+            def calculate(self, atoms=None, properties=None,
+                          system_changes=tuple(all_changes)):
+                super().calculate(atoms, properties, system_changes)
+                nat = len(self.atoms)
+                self.results["energy"] = 0.0
+                self.results["forces"] = np.zeros((nat, 3))
+                self.results["stress"] = np.zeros(6)
+
+        return _Zero()
+
+
 def swap_mutate(atoms: Atoms, fp_calc, rng=None,
                 species_pair: Optional[tuple] = None,
                 rattle: float = 0.05) -> Optional[Atoms]:
@@ -277,6 +298,7 @@ class CRISPSearch:
         gp_auto_tune: bool = False,
         enable_swap_mutations: bool = False,
         n_swap_mutants: int = 4,
+        finisher_stagnation_kick: bool = False,
     ):
         if mlip_calc_factory is None and hpc_relaxer is None:
             raise ValueError(
@@ -358,6 +380,7 @@ class CRISPSearch:
 
         # FP-targeted finisher setup
         self._finisher = None
+        self._kick_finisher = None
         if enable_fp_finisher:
             fcfg = finisher_config or FinisherConfig()
             fcfg.pressure_GPa = pressure_GPa
@@ -367,6 +390,26 @@ class CRISPSearch:
                     target_lib.add_known_phase(phase, label=f"phase_{i}")
             self._finisher = FPTargetFinisher(fp_calc, target_lib, fcfg)
             self._target_lib = target_lib
+
+            # Adaptive stagnation kick: while progress is being made the
+            # finisher refines (annealed MLIP-mixed bias); under
+            # stagnation it switches to a fixed-lambda FP-only kick —
+            # the exploration mechanism that cracked the hard systems
+            # (b28/mgsio3_40) without paying its cost on easy ones.
+            self.finisher_stagnation_kick = finisher_stagnation_kick
+            if finisher_stagnation_kick:
+                import copy
+                kcfg = copy.copy(fcfg)
+                kcfg.pre_steps = 0
+                kcfg.bias_steps = 30
+                kcfg.cleanup_max_steps = 0
+                kcfg.lambda_min = 1.0
+                kcfg.lambda_max = 1.0
+                kcfg.anneal_to_zero = False
+                kcfg.optimizer = "FIRE"
+                kcfg.matching_interval = 10
+                self._kick_finisher = FPTargetFinisher(
+                    fp_calc, target_lib, kcfg)
 
         # CAWR pretreatment setup
         self._cawr_config = None
@@ -1153,17 +1196,25 @@ class CRISPSearch:
                            "none provided (HPC-only mode). Skipping finisher.")
             return candidates, is_mutant
 
+        # Adaptive kick: under stagnation, switch to the fixed-lambda
+        # FP-only kick finisher (no MLIP during the bias phase)
+        stagnating = stagnation_count >= self._finisher.config.stagnation_gens
+        use_kick = self._kick_finisher is not None and stagnating
+        finisher = self._kick_finisher if use_kick else self._finisher
+
         n_finished = 0
         for i, atoms in enumerate(candidates):
             mutant_flag = is_mutant[i] if i < len(is_mutant) else False
-            if not self._finisher.should_run(atoms, gen, is_mutant=mutant_flag):
+            if not finisher.should_run(atoms, gen, is_mutant=mutant_flag):
                 atoms.info['finisher_applied'] = False
                 continue
-            calc = self.treatment_calc_factory()
+            calc = _ZeroCalculator() if use_kick \
+                else self.treatment_calc_factory()
             try:
-                candidates[i] = self._finisher.run(
+                candidates[i] = finisher.run(
                     atoms, calc, is_mutant=mutant_flag,
                     stagnation_count=stagnation_count)
+                candidates[i].info['finisher_kick'] = use_kick
                 n_finished += 1
             except Exception as exc:
                 logger.warning("Finisher failed for candidate %d: %s", i, exc)
@@ -1178,8 +1229,8 @@ class CRISPSearch:
                     pass
 
         if n_finished > 0:
-            stag = stagnation_count >= self._finisher.config.stagnation_gens
-            mode = "PSO-explore" if stag else "exploit"
+            mode = ("FP-kick" if use_kick
+                    else ("PSO-explore" if stagnating else "exploit"))
             print(f"  FP finisher [{mode}]: applied to "
                   f"{n_finished}/{len(candidates)} candidates")
 

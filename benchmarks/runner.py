@@ -94,7 +94,8 @@ def make_calc_factory(potential: str, device: Optional[str] = None,
 
 
 VARIANTS = ('', 'nocawr', 'nofinisher', 'jsnap', 'gpguided', 'gptune',
-            'strongfin', 'fpjheavy', 'zerotreat', 'swap', 'lean', 'leanzero')
+            'strongfin', 'fpjheavy', 'zerotreat', 'swap', 'lean', 'leanzero',
+            'adaptive')
 
 
 def build_search(spec: SystemSpec, mode: str, calc_factory,
@@ -117,6 +118,9 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
       lean       : no CAWR + 2x FP-J mutants, no softmutants (combines
                    the two winning A/B ingredients, MLIP finisher kept)
       leanzero   : lean with the FP-only fixed-lambda finisher
+      adaptive   : lean base; finisher refines (annealed MLIP bias)
+                   while progress is made, switches to the fixed-lambda
+                   FP-only kick under stagnation (explore/exploit)
     """
     from crisp import CRISPSearch, FingerprintCalculator, CAWRConfig
     from crisp.finishers.fp_target import FinisherConfig
@@ -211,7 +215,8 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             cawr_cfg.lambda_min = 1.0
             cawr_cfg.anneal_to_zero = False
             cawr_cfg.cleanup_steps = 0
-        heavy_fpj = variant in ('fpjheavy', 'lean', 'leanzero')
+        heavy_fpj = variant in ('fpjheavy', 'lean', 'leanzero',
+                                'adaptive')
         return CRISPSearch(
             treatment_calc_factory=(
                 (lambda: ZeroCalculator())
@@ -225,7 +230,8 @@ def build_search(spec: SystemSpec, mode: str, calc_factory,
             finisher_config=finisher_cfg,
             n_finisher_targets=8,
             enable_cawr_pretreat=(
-                variant not in ('nocawr', 'lean', 'leanzero')),
+                variant not in ('nocawr', 'lean', 'leanzero', 'adaptive')),
+            finisher_stagnation_kick=(variant == 'adaptive'),
             cawr_config=cawr_cfg,
             cawr_pretreat_mode='snap' if variant == 'jsnap' else 'refine',
             enable_gp_guided=(variant == 'gpguided'),
