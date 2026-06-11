@@ -58,8 +58,9 @@ def main():
     p.add_argument('--budget', type=int, default=600)
     p.add_argument('--out', default='results_harness_v1')
     p.add_argument('--script-dir', default='slurm_jobs')
-    p.add_argument('--workdir',
-                   default='/scratch/lz432/crisp_sota/struct-predict')
+    p.add_argument('--workdir', default=os.getcwd(),
+                   help='repo directory on the cluster that jobs cd into '
+                        '(default: the directory slurm_gen is run from)')
     p.add_argument('--partition', default='gpu')
     p.add_argument('--gres', default='gpu:1')
     p.add_argument('--cpus', type=int, default=4)
