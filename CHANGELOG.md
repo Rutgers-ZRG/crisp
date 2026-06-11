@@ -7,6 +7,30 @@ replayed as synthetic commits.
 
 ## Public Git History
 
+### 2026-06-10/11 - Benchmark campaign verdicts + new operators (sota-dev)
+
+- ~150 seeded GPU runs across 5 systems x 2 potentials. Headline: on
+  three hard benchmarks where random search scores 0/3, the FP-kick
+  configuration (FP-Jacobian mutations with momentum + fixed-lambda
+  FP-only finisher/cluster kicks + GP screening) succeeds on all of
+  them; mgsio3_40 reaches 80% success at a median of 21-54 relaxations.
+  Easy anchor (si16): 5.1-8.3x fewer relaxations than random.
+- The v0.4 MLIP-CAWR pretreat is retired from the default config:
+  it does not symmetrize (48-case audit) and removing it alone takes
+  b28 from 0/3 to 2/3.
+- New operators: FP-guided species-swap mutation (`swap_mutate`),
+  J+ FP-space symmetrization snap (`cawr_snap`), spglib snap, adaptive
+  and mixed finisher kick policies, GP hyperparameter auto-tune
+  (opt-in). A/B verdicts for each recorded in
+  `docs/benchmark-report-v1.md` (negative results included).
+- Empirical ground-truth recalibration caught two wrong assumptions:
+  gamma-B28 is NOT the MACE-MATPES ground state at 50 GPa (hP phase
+  103 meV lower), and MatterSim's SiO2 ground state is an Fdd2
+  framework 0.85 meV below alpha-cristobalite.
+- Measured: per-atom Hungarian FP distance is not an identity metric
+  (impostor floors 0.009-0.02); success criteria are energy+symmetry
+  anchored with per-system calibrated d_fp thresholds.
+
 ### 2026-06-09/10 - Correctness audit + benchmark harness (sota-dev)
 
 - **Fixed: projected bias stress convention.** `project_forces_and_stress`
